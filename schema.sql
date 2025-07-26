@@ -166,7 +166,7 @@ INSERT INTO doctor_availability (doctor_id, day_of_week, start_time, end_time, s
 (6, 2, '08:00:00', '16:00:00', 30, 1), -- Tuesday
 (6, 3, '08:00:00', '16:00:00', 30, 1), -- Wednesday
 (6, 4, '08:00:00', '16:00:00', 30, 1), -- Thursday
-(6, 5, '08:00:00', '16:00:00', 30, 1); -- Friday
+(6, 5, '08:00:00', '16:00:00', 30, 1), -- Friday
 
 -- Dr. Karen Lee (Cardiology) - Monday and Wednesday afternoons
 (7, 1, '12:00:00', '18:00:00', 30, 1), -- Monday
@@ -198,11 +198,11 @@ INSERT INTO appointments (patient_id, doctor_id, appointment_date, appointment_t
 (8, 8, '2025-07-25', '09:30:00', 60, 'scheduled', 'Back pain', 'Severe back pain for weeks'),
 (9, 9, '2025-07-26', '10:00:00', 20, 'confirmed', 'Vaccination', 'Annual flu shot');
 
--- Useful queries for the system
+-- Example queries for reference
 
+/*
 -- Query 1: Get all available slots for a specific doctor on a specific date
 -- Example: Get available slots for Dr. John Smith (doctor_id = 1) on July 21, 2025 (Monday)
-/*
 WITH doctor_slots AS (
     SELECT 
         da.doctor_id,
@@ -231,10 +231,8 @@ FROM doctor_slots ds
 LEFT JOIN booked_slots bs ON ds.slot_time = bs.appointment_time
 WHERE bs.appointment_time IS NULL
 ORDER BY ds.slot_time;
-*/
 
 -- Query 2: Get doctor's schedule with appointments for a specific date
-/*
 SELECT 
     d.first_name || ' ' || d.last_name AS doctor_name,
     s.name AS specialization,
@@ -249,10 +247,8 @@ LEFT JOIN appointments a ON d.id = a.doctor_id AND a.appointment_date = '2025-07
 LEFT JOIN patients p ON a.patient_id = p.id
 WHERE d.id = 1
 ORDER BY a.appointment_time;
-*/
 
 -- Query 3: Get patient's upcoming appointments
-/*
 SELECT 
     a.appointment_date,
     a.appointment_time,
