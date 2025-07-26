@@ -1,0 +1,9 @@
+#! postgres-C:\Users\krish\OneDrive\Documents\doc-ai\schema.sql-persistentVolumeClaim.yaml
+# Generated code, do not edit
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+    name: postgres-c--users-krish-onedrive-documents-doc-ai-schema-sql
+    namespace: doc-ai
+spec:
+    storageClassName: "hostpath" # see docker/desktop-storage-provisioner

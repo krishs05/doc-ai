@@ -1,0 +1,9 @@
+#! backend-C:\Users\krish\OneDrive\Documents\doc-ai-persistentVolumeClaim.yaml
+# Generated code, do not edit
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+    name: backend-c--users-krish-onedrive-documents-doc-ai
+    namespace: doc-ai
+spec:
+    storageClassName: "hostpath" # see docker/desktop-storage-provisioner

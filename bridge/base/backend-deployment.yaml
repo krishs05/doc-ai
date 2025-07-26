@@ -1,0 +1,72 @@
+#! backend-deployment.yaml
+# Generated code, do not edit
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+    name: backend
+    namespace: doc-ai
+    labels:
+        com.docker.compose.project: doc-ai
+        com.docker.compose.service: backend
+spec:
+    replicas: 1
+    selector:
+        matchLabels:
+            com.docker.compose.project: doc-ai
+            com.docker.compose.service: backend
+    strategy:
+        type: Recreate
+    template:
+        metadata:
+            labels:
+                com.docker.compose.project: doc-ai
+                com.docker.compose.service: backend
+                com.docker.compose.network.docai_network: "true"
+        spec:
+            restartPolicy: unless-stopped
+            containers:
+                - name: docai-backend
+                  image: doc-ai-backend
+                  imagePullPolicy: IfNotPresent
+                  env:
+                    - name: AWS_ACCESS_KEY_ID
+                      value: "AKIAWN26KCNEBQPOYJWK"
+                    - name: AWS_REGION
+                      value: "us-east-1"
+                    - name: AWS_SECRET_ACCESS_KEY
+                      value: "/RYYYKDew7uVXgPMh4p0CSZfCQQblL2Fh1fXQi5I"
+                    - name: DB_HOST
+                      value: "postgres"
+                    - name: DB_NAME
+                      value: "hospital"
+                    - name: DB_PASSWORD
+                      value: "postgres"
+                    - name: DB_PORT
+                      value: "5432"
+                    - name: DB_USER
+                      value: "postgres"
+                    - name: FLASK_DEBUG
+                      value: "True"
+                    - name: FLASK_ENV
+                      value: "development"
+                    - name: FLASK_SECRET_KEY
+                      value: "your-super-secret-key-change-in-production"
+                  livenessProbe:
+                    exec:
+                        command: ['curl -f http://localhost:8000/api/health']
+                    periodSeconds: 30
+                    initialDelaySeconds: 40
+                    timeoutSeconds: 10
+                    failureThreshold: 3
+                  ports:
+                    - name: backend-8000
+                      containerPort: 8000
+                  volumeMounts:
+                    - name: app
+                      mountPath: /app
+                      readOnly: true
+            volumes:
+                - name: app
+                  hostPath:
+                    path: C:\Users\krish\OneDrive\Documents\doc-ai
+                  readOnly: true

@@ -1,0 +1,23 @@
+#! kustomization.yaml
+# Generated code, do not edit
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+    - 0-doc-ai-namespace.yaml
+    - backend-C:\Users\krish\OneDrive\Documents\doc-ai-persistentVolumeClaim.yaml
+    - backend-deployment.yaml
+    - backend-expose.yaml
+    - backend-service.yaml
+    - docai_network-network-policy.yaml
+    - frontend-deployment.yaml
+    - frontend-expose.yaml
+    - frontend-service.yaml
+    - postgres-C:\Users\krish\OneDrive\Documents\doc-ai\schema.sql-persistentVolumeClaim.yaml
+    - postgres-deployment.yaml
+    - postgres-expose.yaml
+    - postgres-postgres_data-persistentVolumeClaim.yaml
+    - postgres-service.yaml
+    - redis-deployment.yaml
+    - redis-expose.yaml
+    - redis-redis_data-persistentVolumeClaim.yaml
+    - redis-service.yaml

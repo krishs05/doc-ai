@@ -1,0 +1,8 @@
+#! 0-doc-ai-namespace.yaml
+# Generated code, do not edit
+apiVersion: v1
+kind: Namespace
+metadata:
+    name: doc-ai
+    labels:
+        com.docker.compose.project: doc-ai

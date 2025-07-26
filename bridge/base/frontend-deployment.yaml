@@ -1,0 +1,39 @@
+#! frontend-deployment.yaml
+# Generated code, do not edit
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+    name: frontend
+    namespace: doc-ai
+    labels:
+        com.docker.compose.project: doc-ai
+        com.docker.compose.service: frontend
+spec:
+    replicas: 1
+    selector:
+        matchLabels:
+            com.docker.compose.project: doc-ai
+            com.docker.compose.service: frontend
+    strategy:
+        type: Recreate
+    template:
+        metadata:
+            labels:
+                com.docker.compose.project: doc-ai
+                com.docker.compose.service: frontend
+                com.docker.compose.network.docai_network: "true"
+        spec:
+            restartPolicy: unless-stopped
+            containers:
+                - name: docai-frontend
+                  image: doc-ai-frontend
+                  imagePullPolicy: IfNotPresent
+                  livenessProbe:
+                    exec:
+                        command: ['curl -f http://localhost:5500']
+                    periodSeconds: 30
+                    timeoutSeconds: 10
+                    failureThreshold: 3
+                  ports:
+                    - name: frontend-5500
+                      containerPort: 5500

@@ -1,0 +1,21 @@
+#! frontend-service.yaml
+# Generated code, do not edit
+apiVersion: v1
+kind: Service
+metadata:
+    name: frontend-published
+    namespace: doc-ai
+    labels:
+        com.docker.compose.project: doc-ai
+        com.docker.compose.service: frontend
+spec:
+    selector:
+        com.docker.compose.project: doc-ai
+        com.docker.compose.service: frontend
+    ports:
+        - name: frontend-5500
+          port: 5500
+          protocol: TCP
+          targetPort: frontend-5500
+
+# check if there is at least one published port

@@ -1,0 +1,18 @@
+#! postgres-C:\Users\krish\OneDrive\Documents\doc-ai\schema.sql-persistentVolumeClaim.yaml
+# Generated code, do not edit
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+    name: postgres-c--users-krish-onedrive-documents-doc-ai-schema-sql
+    namespace: doc-ai
+    labels:
+        com.docker.compose.service: postgres
+        com.docker.compose.volume: C:\Users\krish\OneDrive\Documents\doc-ai\schema.sql
+spec:
+    accessModes:
+        # TODO would need to check which services use this volume
+        - ReadOnlyMany
+    volumeMode: Filesystem
+    resources:
+        requests:
+            storage: 100Mi
