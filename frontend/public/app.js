@@ -1,7 +1,7 @@
 class DocAIApp {
   constructor() {
       this.currentPage = 'home';
-      this.apiBaseUrl = 'http://localhost:5000';
+      this.apiBaseUrl = 'http://localhost:8000';
       this.appointments = [];
       this.isLoading = false;
       this.init();

@@ -1,363 +1,401 @@
 class ChatInterface {
-  constructor() {
-      this.isOpen = false;
-      this.apiBaseUrl = 'http://localhost:5000';
-      this.isTyping = false;
-      this.sessionId = this.generateSessionId();
-      this.init();
+    constructor() {
+        this.isOpen = false;
+        this.apiBaseUrl = 'http://localhost:8000';  // Fixed port to match backend
+        this.isTyping = false;
+        this.sessionId = this.generateSessionId();
+        this.init();
+    }
+  
+    generateSessionId() {
+        return 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+    }
+  
+    init() {
+        this.setupEventListeners();
+        this.initializeChat();
+        this.setupChatInterface();
+        console.log('Chat initialized with session ID:', this.sessionId);
+    }
+  
+    setupChatInterface() {
+        // Create chat interface if it doesn't exist
+        if (!document.getElementById('chatContainer')) {
+            this.createChatInterface();
+        }
+    }
+  
+    createChatInterface() {
+        const chatHTML = `
+            <div class="chat-container" id="chatContainer">
+                <div class="chat-header">
+                    <h3>AI Healthcare Assistant</h3>
+                    <button class="chat-close" onclick="chat.closeChat()">×</button>
+                </div>
+                <div class="chat-messages" id="chatMessages"></div>
+                <div class="chat-input-container">
+                    <input type="text" id="chatInput" placeholder="Type your message...">
+                    <button id="sendButton">Send</button>
+                </div>
+                <div class="chat-suggestions" id="chatSuggestions">
+                    <button onclick="chat.sendSuggestion('I want to book an appointment')">Book Appointment</button>
+                    <button onclick="chat.sendSuggestion('What doctors are available?')">Find Doctors</button>
+                    <button onclick="chat.sendSuggestion('Show my appointments')">My Appointments</button>
+                </div>
+            </div>
+            <div class="chat-toggle" id="chatToggle" onclick="chat.toggleChat()">
+                💬
+            </div>
+        `;
+        
+        document.body.insertAdjacentHTML('beforeend', chatHTML);
+    }
+  
+    setupEventListeners() {
+        // Setup will be called after DOM is ready
+        document.addEventListener('DOMContentLoaded', () => {
+            this.attachEventListeners();
+        });
+        
+        // If DOM is already ready
+        if (document.readyState === 'complete' || document.readyState === 'interactive') {
+            setTimeout(() => this.attachEventListeners(), 0);
+        }
+    }
+  
+    attachEventListeners() {
+        const chatInput = document.getElementById('chatInput');
+        if (chatInput) {
+            chatInput.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    this.sendMessage();
+                }
+            });
+        }
+  
+        const sendButton = document.getElementById('sendButton');
+        if (sendButton) {
+            sendButton.addEventListener('click', () => this.sendMessage());
+        }
+    }
+  
+    initializeChat() {
+        setTimeout(() => {
+            this.addMessage(
+                "Hello! I'm your AI healthcare assistant. I can help you book appointments with our doctors. What would you like to do today?\n\n• Book a new appointment\n• Find available doctors\n• Get help with scheduling",
+                'ai'
+            );
+        }, 500);
+    }
+  
+    openChat() {
+        const container = document.getElementById('chatContainer');
+        const toggle = document.getElementById('chatToggle');
+        
+        if (container && toggle) {
+            container.classList.add('active');
+            toggle.style.display = 'none';
+            this.isOpen = true;
+            
+            // Focus on input
+            setTimeout(() => {
+                const input = document.getElementById('chatInput');
+                if (input) input.focus();
+            }, 300);
+        }
+    }
+  
+    closeChat() {
+        const container = document.getElementById('chatContainer');
+        const toggle = document.getElementById('chatToggle');
+        
+        if (container && toggle) {
+            container.classList.remove('active');
+            toggle.style.display = 'flex';
+            this.isOpen = false;
+        }
+    }
+  
+    toggleChat() {
+        if (this.isOpen) {
+            this.closeChat();
+        } else {
+            this.openChat();
+        }
+    }
+  
+    sendSuggestion(message) {
+        const input = document.getElementById('chatInput');
+        if (input) {
+            input.value = message;
+            this.sendMessage();
+        }
+    }
+  
+    async sendMessage() {
+        const input = document.getElementById('chatInput');
+        const message = input.value.trim();
+        
+        if (!message || this.isTyping) return;
+  
+        this.addMessage(message, 'user');
+        input.value = '';
+        
+        this.showTypingIndicator();
+        this.isTyping = true;
+  
+        try {
+            console.log('Sending message to:', `${this.apiBaseUrl}/api/chat`);
+            const response = await fetch(`${this.apiBaseUrl}/api/chat`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                credentials: 'include',
+                body: JSON.stringify({ 
+                    message: message,
+                    session_id: this.sessionId
+                }),
+            });
+  
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+  
+            const data = await response.json();
+            console.log('Chat response:', data);
+            
+            this.hideTypingIndicator();
+            this.isTyping = false;
+  
+            if (data.success) {
+                this.addMessage(data.response, 'ai');
+                
+                // Update session ID if provided
+                if (data.session_id) {
+                    this.sessionId = data.session_id;
+                }
+                
+                // Check if an appointment was booked
+                if (data.appointment_booked) {
+                    console.log('Appointment was booked, refreshing appointments list...');
+                    this.showSuccessMessage("Appointment booked successfully!");
+                    
+                    // Refresh appointments list if it exists
+                    setTimeout(() => {
+                        this.refreshAppointmentsList();
+                    }, 1000);
+                }
+                
+                // Update suggestions based on context
+                this.updateSuggestions(data.context);
+                
+            } else {
+                this.addMessage('Sorry, I encountered an error. Please try again.', 'ai');
+                console.error('Chat error:', data.error);
+            }
+  
+        } catch (error) {
+            console.error('Chat request failed:', error);
+            this.hideTypingIndicator();
+            this.isTyping = false;
+            this.addMessage('Sorry, I could not connect to the server. Please check your connection and try again.', 'ai');
+        }
+    }
+  
+    addMessage(content, sender) {
+        const messagesContainer = document.getElementById('chatMessages');
+        if (!messagesContainer) return;
+  
+        const messageElement = document.createElement('div');
+        messageElement.className = `message ${sender}`;
+        
+        // Format message content
+        const formattedContent = this.formatMessage(content);
+        messageElement.innerHTML = formattedContent;
+        
+        messagesContainer.appendChild(messageElement);
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    }
+  
+    formatMessage(content) {
+        return content
+            .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+            .replace(/\*(.*?)\*/g, '<em>$1</em>')
+            .replace(/\n/g, '<br>')
+            .replace(/• /g, '&bull; ');
+    }
+  
+    showTypingIndicator() {
+        const messagesContainer = document.getElementById('chatMessages');
+        if (!messagesContainer) return;
+  
+        const indicator = document.createElement('div');
+        indicator.id = 'typingIndicator';
+        indicator.className = 'message ai typing';
+        indicator.innerHTML = `
+            <div class="typing-dots">
+                <span></span>
+                <span></span>
+                <span></span>
+            </div>
+            AI is typing...
+        `;
+        
+        messagesContainer.appendChild(indicator);
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    }
+  
+    hideTypingIndicator() {
+        const indicator = document.getElementById('typingIndicator');
+        if (indicator) {
+            indicator.remove();
+        }
+    }
+  
+    showSuccessMessage(message) {
+        // Create a success toast/notification
+        const toast = document.createElement('div');
+        toast.className = 'success-toast';
+        toast.innerHTML = `
+            <i class="fas fa-check-circle"></i>
+            <span>${message}</span>
+        `;
+        
+        document.body.appendChild(toast);
+        
+        // Auto remove after 3 seconds
+        setTimeout(() => {
+            toast.classList.add('fade-out');
+            setTimeout(() => {
+                if (toast.parentNode) {
+                    toast.parentNode.removeChild(toast);
+                }
+            }, 300);
+        }, 3000);
+    }
+  
+    async refreshAppointmentsList() {
+        try {
+            console.log('Refreshing appointments list...');
+            
+            // Check if we're on a page with appointments
+            const appointmentsContainer = document.getElementById('appointmentsContainer');
+            const appointmentsList = document.getElementById('appointmentsList');
+            
+            if (appointmentsContainer && window.app && typeof window.app.loadAppointments === 'function') {
+                // Use the main app's appointment loading function
+                await window.app.loadAppointments();
+                console.log('Appointments refreshed via main app');
+            } else if (appointmentsList && typeof window.loadAppointments === 'function') {
+                // Use the standalone loadAppointments function
+                await window.loadAppointments();
+                console.log('Appointments refreshed via standalone function');
+            } else {
+                // Manual refresh for any appointments display
+                const response = await fetch(`${this.apiBaseUrl}/api/appointments`);
+                if (response.ok) {
+                    const appointments = await response.json();
+                    console.log('Fetched updated appointments:', appointments);
+                    
+                    // Try to update any appointments display we can find
+                    this.updateAppointmentsDisplay(appointments);
+                }
+            }
+        } catch (error) {
+            console.error('Error refreshing appointments:', error);
+        }
+    }
+  
+    updateAppointmentsDisplay(appointments) {
+        // Try multiple possible appointment containers
+        const containers = [
+            document.getElementById('appointmentsList'),
+            document.getElementById('appointmentsContainer'),
+            document.querySelector('.appointments-list'),
+            document.querySelector('[data-appointments]')
+        ];
+  
+        containers.forEach(container => {
+            if (container) {
+                this.renderAppointments(container, appointments);
+            }
+        });
+    }
+  
+    renderAppointments(container, appointments) {
+        if (appointments.length === 0) {
+            container.innerHTML = `
+                <p style="text-align: center; color: var(--text-secondary);">
+                    No upcoming appointments. 
+                    <a href="#" onclick="chat.openChat()" style="color: var(--primary);">Book one now!</a>
+                </p>
+            `;
+        } else {
+            container.innerHTML = appointments.map(apt => `
+                <div class="appointment-item" data-appointment-id="${apt.id}">
+                    <div class="appointment-date">
+                        <div style="font-size: 0.875rem;">${new Date(apt.date || apt.appointment_date).toLocaleDateString('en-US', { month: 'short' })}</div>
+                        <div style="font-size: 1.5rem; font-weight: 700;">${new Date(apt.date || apt.appointment_date).getDate()}</div>
+                    </div>
+                    <div style="flex: 1;">
+                        <h4 style="margin: 0; color: var(--text-primary);">
+                            Dr. ${apt.doctor_name}
+                        </h4>
+                        <p style="color: var(--text-secondary); margin: 0;">
+                            ${apt.specialization || apt.department} • ${apt.appointment_time}
+                        </p>
+                        <p style="color: var(--text-secondary); margin: 0;">
+                            <i class="fas fa-user"></i> ${apt.patient_name}
+                        </p>
+                    </div>
+                    <div>
+                        <span class="btn btn-secondary" style="font-size: 0.875rem;">
+                            ${apt.status}
+                        </span>
+                    </div>
+                </div>
+            `).join('');
+        }
+    }
+  
+    updateSuggestions(context) {
+        const suggestionsContainer = document.getElementById('chatSuggestions');
+        if (!suggestionsContainer || !context) return;
+  
+        // You can customize suggestions based on context
+        // For now, keep default suggestions
+    }
   }
-
-  generateSessionId() {
-      return 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
-  }
-
-  init() {
-      this.setupEventListeners();
-      this.initializeChat();
-      console.log('Chat initialized with session ID:', this.sessionId);
-  }
-
-  setupEventListeners() {
-      const chatInput = document.getElementById('chatInput');
-      if (chatInput) {
-          chatInput.addEventListener('keypress', (e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  this.sendMessage();
-              }
-          });
-      }
-
-      const sendButton = document.getElementById('sendButton');
-      if (sendButton) {
-          sendButton.addEventListener('click', () => this.sendMessage());
-      }
-  }
-
-  initializeChat() {
+  
+  // Initialize chat when DOM is ready
+  let chat;
+  
+  document.addEventListener('DOMContentLoaded', function() {
+      chat = new ChatInterface();
+      window.chat = chat; // Make it globally accessible
+  });
+  
+  // Also initialize if DOM is already loaded
+  if (document.readyState === 'complete' || document.readyState === 'interactive') {
       setTimeout(() => {
-          this.addMessage(
-              "Hello! I'm your AI healthcare assistant. I can help you book appointments with our doctors. What would you like to do today?\n\n• Book a new appointment\n• Find available doctors\n• Get help with scheduling",
-              'ai'
-          );
-      }, 500);
-  }
-
-  async sendMessage() {
-      const input = document.getElementById('chatInput');
-      const message = input.value.trim();
-      
-      if (!message || this.isTyping) return;
-
-      this.addMessage(message, 'user');
-      input.value = '';
-      
-      this.showTypingIndicator();
-      this.isTyping = true;
-
-      try {
-          const response = await fetch(`${this.apiBaseUrl}/api/chat`, {
-              method: 'POST',
-              headers: {
-                  'Content-Type': 'application/json',
-              },
-              credentials: 'include',
-              body: JSON.stringify({ 
-                  message: message,
-                  session_id: this.sessionId  // Include session ID
-              }),
-          });
-
-          if (!response.ok) {
-              throw new Error(`HTTP error! status: ${response.status}`);
+          if (!window.chat) {
+              chat = new ChatInterface();
+              window.chat = chat;
           }
-
-          const data = await response.json();
-          
-          this.hideTypingIndicator();
-          this.isTyping = false;
-
-          if (data.success) {
-              this.addMessage(data.response, 'ai');
-              
-              // Update session ID if provided
-              if (data.context?.session_id) {
-                  this.sessionId = data.context.session_id;
-              }
-              
-              // Update suggestions based on context
-              this.updateSuggestions(data.context);
-              
-              console.log('Chat context:', data.context);
-          } else {
-              this.addMessage('Sorry, I encountered an error. Please try again.', 'ai');
-              console.error('API Error:', data.error);
-          }
-      } catch (error) {
-          console.error('Chat error:', error);
-          this.hideTypingIndicator();
-          this.isTyping = false;
-          
-          let errorMessage = 'Sorry, I cannot connect to the server right now. Please check if the backend server is running on port 5000.';
-          this.addMessage(errorMessage, 'ai');
+      }, 0);
+  }
+  
+  // Global functions for compatibility
+  function openChat() {
+      if (window.chat) {
+          window.chat.openChat();
       }
   }
-
-  updateSuggestions(context) {
-      const suggestionsContainer = document.getElementById('chatSuggestions');
-      if (!suggestionsContainer) return;
-
-      let suggestions = [];
-
-      if (context && context.step) {
-          switch (context.step) {
-              case 'need_name':
-                  suggestions = ['My name is John Doe', 'I want to book an appointment'];
-                  break;
-              case 'need_phone':
-                  suggestions = ['My phone is 8800554608', '8800554608'];
-                  break;
-              case 'need_specialty':
-                  suggestions = ['I need a cardiologist', 'General checkup', 'Which doctors are available?'];
-                  break;
-              case 'select_doctor':
-                  suggestions = ['1', '2', 'Dr. Smith'];
-                  break;
-              case 'select_time':
-                  suggestions = ['1', '2', '3'];
-                  break;
-              default:
-                  suggestions = ['📅 Book Appointment', '👨‍⚕️ Find Doctors', '🔄 Reschedule'];
-          }
-      } else {
-          suggestions = ['📅 Book Appointment', '👨‍⚕️ Find Doctors', '❓ Help'];
-      }
-
-      suggestionsContainer.innerHTML = '';
-      suggestions.forEach(suggestion => {
-          const btn = document.createElement('button');
-          btn.className = 'suggestion-btn';
-          btn.textContent = suggestion;
-          btn.onclick = () => this.sendSuggestion(suggestion);
-          suggestionsContainer.appendChild(btn);
-      });
-  }
-
-  addMessage(content, sender) {
-      const messagesContainer = document.getElementById('chatMessages');
-      if (!messagesContainer) return;
-
-      const messageDiv = document.createElement('div');
-      messageDiv.className = `message ${sender}-message`;
-      
-      messageDiv.innerHTML = `
-          <div class="message-content">${this.formatMessage(content)}</div>
-          <div class="message-time">${this.formatTime(new Date())}</div>
-      `;
-
-      messagesContainer.appendChild(messageDiv);
-      this.scrollToBottom();
-
-      // Add animation
-      messageDiv.style.opacity = '0';
-      messageDiv.style.transform = 'translateY(20px)';
-      
-      setTimeout(() => {
-          messageDiv.style.transition = 'all 0.3s ease';
-          messageDiv.style.opacity = '1';
-          messageDiv.style.transform = 'translateY(0)';
-      }, 50);
-  }
-
-  formatMessage(content) {
-      // Escape HTML to prevent XSS
-      content = content.replace(/&/g, '&amp;')
-                      .replace(/</g, '&lt;')
-                      .replace(/>/g, '&gt;');
-      
-      // Format bold text
-      content = content.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-      
-      // Format bullet points
-      content = content.replace(/^• (.*$)/gim, '<div class="bullet-point">• $1</div>');
-      
-      // Convert line breaks to <br>
-      content = content.replace(/\n/g, '<br>');
-      
-      return content;
-  }
-
-  formatTime(date) {
-      return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  }
-
-  showTypingIndicator() {
-      this.hideTypingIndicator();
-      
-      const messagesContainer = document.getElementById('chatMessages');
-      if (!messagesContainer) return;
-
-      const typingDiv = document.createElement('div');
-      typingDiv.className = 'message ai-message typing-message';
-      typingDiv.id = 'typingIndicator';
-      
-      typingDiv.innerHTML = `
-          <div class="message-content">
-              <div class="typing-indicator">
-                  <span></span>
-                  <span></span>
-                  <span></span>
-              </div>
-          </div>
-      `;
-
-      messagesContainer.appendChild(typingDiv);
-      this.scrollToBottom();
-  }
-
-  hideTypingIndicator() {
-      const typingIndicator = document.getElementById('typingIndicator');
-      if (typingIndicator) {
-          typingIndicator.remove();
+  
+  function closeChat() {
+      if (window.chat) {
+          window.chat.closeChat();
       }
   }
-
-  scrollToBottom() {
-      const messagesContainer = document.getElementById('chatMessages');
-      if (messagesContainer) {
-          setTimeout(() => {
-              messagesContainer.scrollTop = messagesContainer.scrollHeight;
-          }, 100);
-      }
-  }
-
-  async clearConversation() {
-      try {
-          // Generate new session ID
-          this.sessionId = this.generateSessionId();
-          
-          // Clear UI
-          const messagesContainer = document.getElementById('chatMessages');
-          if (messagesContainer) {
-              messagesContainer.innerHTML = '';
-          }
-          
-          // Reinitialize chat
-          this.initializeChat();
-          
-          this.showNotification('Conversation cleared successfully!', 'success');
-      } catch (error) {
-          console.error('Error clearing conversation:', error);
-      }
-  }
-
-  showNotification(message, type = 'info') {
-      const notification = document.createElement('div');
-      notification.className = `notification notification-${type}`;
-      notification.innerHTML = message;
-      notification.style.cssText = `
-          position: fixed;
-          top: 20px;
-          right: 20px;
-          padding: 15px;
-          background: white;
-          border-radius: 8px;
-          box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-          z-index: 10000;
-          border-left: 4px solid ${type === 'success' ? '#10b981' : '#3b82f6'};
-      `;
-      
-      document.body.appendChild(notification);
-      
-      setTimeout(() => {
-          if (notification.parentElement) {
-              notification.remove();
-          }
-      }, 3000);
-  }
-
-  sendSuggestion(suggestion) {
-      const input = document.getElementById('chatInput');
-      if (input) {
-          // Remove emoji from suggestion
-          const cleanSuggestion = suggestion.replace(/^[\u{1F300}-\u{1F9FF}]\s*/u, '');
-          input.value = cleanSuggestion;
-          this.sendMessage();
-      }
-  }
-
-  openChat() {
-      const container = document.getElementById('chatContainer');
-      const toggle = document.querySelector('.chat-toggle');
-      
-      if (container && toggle) {
-          container.classList.remove('hidden');
-          setTimeout(() => container.classList.add('show'), 10);
-          toggle.style.display = 'none';
-          this.isOpen = true;
-
-          const input = document.getElementById('chatInput');
-          if (input) {
-              setTimeout(() => input.focus(), 300);
-          }
-      }
-  }
-
-  closeChat() {
-      const container = document.getElementById('chatContainer');
-      const toggle = document.querySelector('.chat-toggle');
-      
-      if (container && toggle) {
-          container.classList.remove('show');
-          setTimeout(() => {
-              container.classList.add('hidden');
-              toggle.style.display = 'flex';
-          }, 300);
-          this.isOpen = false;
-      }
-  }
-
-  toggleChat() {
-      if (this.isOpen) {
-          this.closeChat();
-      } else {
-          this.openChat();
-      }
-  }
-}
-
-// Global functions
-function openChat() {
-  if (window.chat) {
-      window.chat.openChat();
-  }
-}
-
-function closeChat() {
-  if (window.chat) {
-      window.chat.closeChat();
-  }
-}
-
-function toggleChat() {
-  if (window.chat) {
-      window.chat.toggleChat();
-  }
-}
-
-function sendSuggestion(suggestion) {
-  if (window.chat) {
-      window.chat.sendSuggestion(suggestion);
-  }
-}
-
-function sendMessage() {
-  if (window.chat) {
-      window.chat.sendMessage();
-  }
-}
-
-// Initialize when DOM loads
-document.addEventListener('DOMContentLoaded', () => {
-  window.chat = new ChatInterface();
-});
