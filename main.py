@@ -1,269 +1,267 @@
-# Enhanced main.py - Replace your existing main.py with this content
-# This implements RAG-enhanced AI while keeping your existing file structure
-
-from flask import Flask, request, jsonify, render_template
-from flask_cors import CORS
-import psycopg2
-from psycopg2.extras import RealDictCursor
-import json
-import uuid
-from datetime import datetime, timedelta
-import re
 import os
 import logging
-from dotenv import load_dotenv
-from typing import Dict, List, Optional
+import uuid
+import json
+from datetime import datetime, timedelta, date, time
+from typing import Optional, List, Dict, Any, Tuple
 from dataclasses import dataclass
+import psycopg2
+from psycopg2.extras import RealDictCursor
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+from dotenv import load_dotenv
+import re
 
-# Enhanced imports for RAG implementation
-import numpy as np
-try:
-    from sentence_transformers import SentenceTransformer
-    import faiss
-    RAG_AVAILABLE = True
-except ImportError:
-    print("⚠️  RAG libraries not installed. Install with: pip install sentence-transformers faiss-cpu")
-    RAG_AVAILABLE = False
-
-# Import existing bedrock functionality
-try:
-    from bedrock import get_ai_response, get_bedrock_client
-    BEDROCK_AVAILABLE = True
-except ImportError:
-    print("⚠️  bedrock.py not found. AI features will be limited.")
-    BEDROCK_AVAILABLE = False
-
+# Load environment variables
 load_dotenv()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Initialize Flask app
 app = Flask(__name__)
-CORS(app, supports_credentials=True, origins=['http://localhost:5500', 'http://127.0.0.1:5500'])
+CORS(app, origins=["http://localhost:5500", "http://localhost:3000"])
 
-app.config['SECRET_KEY'] = os.getenv('FLASK_SECRET_KEY', 'your-super-secret-key-change-in-production')
+# Database configuration
+DB_CONFIG = {
+    'host': os.getenv('DB_HOST', 'localhost'),
+    'database': os.getenv('DB_NAME', 'hospital'),
+    'user': os.getenv('DB_USER', 'postgres'),
+    'password': os.getenv('DB_PASSWORD', ''),
+    'port': os.getenv('DB_PORT', 5432)
+}
+
+# Try importing AWS Bedrock
+try:
+    import boto3
+    bedrock_runtime = boto3.client('bedrock-runtime', region_name=os.getenv('AWS_REGION', 'us-east-1'))
+    BEDROCK_AVAILABLE = True
+    logger.info("✅ AWS Bedrock: Available")
+except Exception as e:
+    BEDROCK_AVAILABLE = False
+    logger.warning(f"❌ AWS Bedrock: Not available - {e}")
+
+# Try importing RAG dependencies
+try:
+    from sentence_transformers import SentenceTransformer
+    import faiss
+    import numpy as np
+    RAG_AVAILABLE = True
+    logger.info("✅ RAG capabilities: Available")
+except ImportError as e:
+    RAG_AVAILABLE = False
+    logger.warning(f"❌ RAG capabilities: Not available - {e}")
 
 @dataclass
 class DatabaseContext:
-    """Stores database information for RAG context"""
     doctors: List[Dict]
     departments: List[Dict]
-    available_slots: List[Dict]
+    specializations: List[Dict]
     recent_appointments: List[Dict]
 
-class EnhancedConversationManager:
-    """Enhanced conversation management with RAG capabilities"""
+def get_db_connection():
+    """Get database connection with error handling"""
+    try:
+        return psycopg2.connect(**DB_CONFIG)
+    except Exception as e:
+        logger.error(f"Database connection error: {e}")
+        return None
+
+def get_ai_response(system_prompt: str, user_message: str, conversation_history: List = None) -> str:
+    """Get response from AWS Bedrock Claude"""
+    if not BEDROCK_AVAILABLE:
+        return "AI service is not available. Please check your AWS configuration."
     
+    try:
+        # Build conversation context
+        messages = []
+        if conversation_history:
+            for msg in conversation_history[-10:]:  # Last 10 messages for context
+                messages.append({"role": "user", "content": msg.get('user_message', '')})
+                messages.append({"role": "assistant", "content": msg.get('ai_response', '')})
+        
+        messages.append({"role": "user", "content": user_message})
+        
+        # Prepare the request
+        request_body = {
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": 1000,
+            "system": system_prompt,
+            "messages": messages
+        }
+        
+        # Call Bedrock
+        response = bedrock_runtime.invoke_model(
+            body=json.dumps(request_body),
+            modelId="anthropic.claude-3-sonnet-20240229-v1:0",
+            accept="application/json",
+            contentType="application/json"
+        )
+        
+        response_body = json.loads(response.get('body').read())
+        return response_body['content'][0]['text']
+        
+    except Exception as e:
+        logger.error(f"Bedrock API error: {e}")
+        return "I'm having trouble processing your request. Please try again."
+
+class EnhancedConversationManager:
     def __init__(self):
         self.conversations = {}
-        self.db_context_cache = {}
-        self.cache_expiry = 300  # 5 minutes
+        self.vector_store = None
+        self.embedding_model = None
+        self.knowledge_base = []
         
-        # Initialize RAG components if available
         if RAG_AVAILABLE:
-            self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
-            self.vector_store = None
-            self.corpus_texts = []
-            self._initialize_vector_store()
-        else:
-            self.embedding_model = None
-            self.vector_store = None
+            self._initialize_rag()
     
-    def _get_db_connection(self):
-        """Get database connection with error handling"""
+    def _initialize_rag(self):
+        """Initialize RAG components"""
         try:
-            return psycopg2.connect(
-                host=os.getenv('DB_HOST', 'localhost'),
-                database=os.getenv('DB_NAME', 'hospital'),
-                user=os.getenv('DB_USER', 'postgres'),
-                password=os.getenv('DB_PASSWORD', 'postgres')
-            )
+            self.embedding_model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
+            self._build_knowledge_base()
+            logger.info("✅ RAG system initialized")
         except Exception as e:
-            logger.error(f"Database connection error: {e}")
-            return None
+            logger.error(f"RAG initialization failed: {e}")
+    
+    def _build_knowledge_base(self):
+        """Build knowledge base from database content"""
+        try:
+            db_context = self._get_database_context()
+            
+            # Build knowledge entries
+            knowledge_entries = []
+            
+            # Add doctor information
+            for doctor in db_context.doctors:
+                entry = f"Dr. {doctor['name']} is a {doctor['specialization']} with {doctor.get('experience_years', 'several')} years of experience."
+                knowledge_entries.append(entry)
+            
+            # Add specialization information
+            for spec in db_context.specializations:
+                entry = f"The {spec['name']} department handles {spec.get('description', 'medical services')}."
+                knowledge_entries.append(entry)
+            
+            # Add general hospital information
+            knowledge_entries.extend([
+                "To book an appointment, we need patient name, phone number, date of birth, preferred doctor or specialty, and preferred date/time.",
+                "Appointments can be scheduled Monday through Friday, with some doctors available on weekends.",
+                "We offer services in Cardiology, Dermatology, Pediatrics, Orthopedics, and Neurology.",
+                "All appointments need to be confirmed before they are finalized.",
+                "Patients can reschedule or cancel appointments by contacting the hospital."
+            ])
+            
+            if knowledge_entries and self.embedding_model:
+                # Create embeddings
+                embeddings = self.embedding_model.encode(knowledge_entries)
+                
+                # Build FAISS index
+                dimension = embeddings.shape[1]
+                self.vector_store = faiss.IndexFlatIP(dimension)
+                self.vector_store.add(embeddings.astype('float32'))
+                self.knowledge_base = knowledge_entries
+                
+                logger.info(f"✅ Knowledge base built with {len(knowledge_entries)} entries")
+                
+        except Exception as e:
+            logger.error(f"Knowledge base building failed: {e}")
+    
+    def _get_relevant_context(self, query: str, k: int = 3) -> str:
+        """Get relevant context using RAG"""
+        if not self.vector_store or not self.embedding_model:
+            return ""
+        
+        try:
+            # Get query embedding
+            query_embedding = self.embedding_model.encode([query])
+            
+            # Search for similar content
+            scores, indices = self.vector_store.search(query_embedding.astype('float32'), k)
+            
+            # Build context from retrieved knowledge
+            relevant_context = []
+            for i, idx in enumerate(indices[0]):
+                if scores[0][i] > 0.3:  # Similarity threshold
+                    relevant_context.append(self.knowledge_base[idx])
+            
+            return "\n".join(relevant_context)
+            
+        except Exception as e:
+            logger.error(f"RAG context retrieval failed: {e}")
+            return ""
     
     def _execute_query(self, query: str, params: tuple = None) -> Optional[List[Dict]]:
         """Execute database query with error handling"""
-        conn = self._get_db_connection()
+        conn = get_db_connection()
         if not conn:
             return None
         
         try:
-            cursor = conn.cursor(cursor_factory=RealDictCursor)
-            cursor.execute(query, params)
-            result = cursor.fetchall()
-            cursor.close()
-            conn.close()
-            return [dict(row) for row in result]
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+                cursor.execute(query, params)
+                if query.strip().upper().startswith('SELECT'):
+                    return [dict(row) for row in cursor.fetchall()]
+                else:
+                    conn.commit()
+                    return [{'success': True}]
         except Exception as e:
             logger.error(f"Database query error: {e}")
-            if conn:
-                conn.close()
+            conn.rollback()
             return None
+        finally:
+            conn.close()
     
     def _get_database_context(self) -> DatabaseContext:
-        """Get current database context with corrected column names"""
-        current_time = datetime.now()
-        cache_key = 'db_context'
-        
-        # Check cache
-        if cache_key in self.db_context_cache:
-            cached_time, cached_data = self.db_context_cache[cache_key]
-            if (current_time - cached_time).seconds < self.cache_expiry:
-                return cached_data
-        
-        logger.info("Refreshing database context for RAG")
-        
-        # Get doctors with corrected column names
-        doctors_query = """
-        SELECT d.id, 
-               CONCAT(d.first_name, ' ', d.last_name) as name,
-               s.name as specialization, 
-               d.experience_years, 
-               d.consultation_fee, 
-               d.phone, 
-               d.email,
-               s.name as department,
-               d.is_active
-        FROM doctors d
-        JOIN specializations s ON d.specialization_id = s.id
-        WHERE d.is_active = true
-        ORDER BY s.name, d.last_name
-        """
-        
-        # Get departments (specializations)
-        departments_query = """
-        SELECT s.id, s.name, s.description,
-               COUNT(d.id) as doctor_count
-        FROM specializations s
-        LEFT JOIN doctors d ON s.id = d.specialization_id AND d.is_active = true
-        GROUP BY s.id, s.name, s.description
-        ORDER BY s.name
-        """
-        
-        # Get available slots with corrected column names
-        available_slots_query = """
-        SELECT da.id, da.doctor_id, 
-               CONCAT(d.first_name, ' ', d.last_name) as doctor_name,
-               s.name as specialization,
-               da.day_of_week, da.start_time, da.end_time, da.slot_duration,
-               da.is_active
-        FROM doctor_availability da
-        JOIN doctors d ON da.doctor_id = d.id
-        JOIN specializations s ON d.specialization_id = s.id
-        WHERE da.is_active = true AND d.is_active = true
-        ORDER BY da.day_of_week, da.start_time
-        """
-        
-        # Get recent appointments with corrected column names
-        recent_appointments_query = """
-        SELECT a.id, a.appointment_date, a.appointment_time, a.status, a.reason_for_visit,
-               CONCAT(p.first_name, ' ', p.last_name) as patient_name,
-               CONCAT(d.first_name, ' ', d.last_name) as doctor_name,
-               s.name as specialization
-        FROM appointments a
-        JOIN patients p ON a.patient_id = p.id
-        JOIN doctors d ON a.doctor_id = d.id
-        JOIN specializations s ON d.specialization_id = s.id
-        WHERE a.appointment_date >= CURRENT_DATE - INTERVAL '7 days'
-        ORDER BY a.appointment_date DESC, a.appointment_time DESC
-        LIMIT 20
-        """
-        
-        # Execute queries
-        doctors = self._execute_query(doctors_query) or []
-        departments = self._execute_query(departments_query) or []
-        available_slots = self._execute_query(available_slots_query) or []
-        recent_appointments = self._execute_query(recent_appointments_query) or []
-        
-        # Create context object
-        db_context = DatabaseContext(
-            doctors=doctors,
-            departments=departments,
-            available_slots=available_slots,
-            recent_appointments=recent_appointments
-        )
-        
-        # Cache the result
-        self.db_context_cache[cache_key] = (current_time, db_context)
-        
-        return db_context
-    
-    def _initialize_vector_store(self):
-        """Initialize FAISS vector store with database content"""
-        if not RAG_AVAILABLE:
-            return
-        
+        """Get current database context for AI"""
         try:
-            db_context = self._get_database_context()
+            # Get doctors with specializations
+            doctors_query = """
+            SELECT d.id, 
+                   CONCAT(d.first_name, ' ', d.last_name) as name,
+                   d.first_name, d.last_name, d.email, d.phone,
+                   d.experience_years, d.consultation_fee,
+                   s.name as specialization, s.description as specialization_description
+            FROM doctors d 
+            LEFT JOIN specializations s ON d.specialization_id = s.id 
+            WHERE d.is_active = true
+            ORDER BY d.first_name, d.last_name
+            """
+            doctors = self._execute_query(doctors_query) or []
             
-            # Create corpus from database content
-            corpus_texts = []
+            # Get departments
+            departments_query = "SELECT id, name, description FROM departments WHERE is_active = true"
+            departments = self._execute_query(departments_query) or []
             
-            # Add doctor information
-            for doctor in db_context.doctors:
-                text = f"Dr. {doctor['name']} is a {doctor['specialization']} specialist with {doctor.get('experience_years', 'unknown')} years of experience. Consultation fee: ${doctor.get('consultation_fee', 'N/A')}. Contact: {doctor.get('phone', 'N/A')}"
-                corpus_texts.append(text)
+            # Get specializations
+            specializations_query = "SELECT id, name, description FROM specializations"
+            specializations = self._execute_query(specializations_query) or []
             
-            # Add department information
-            for dept in db_context.departments:
-                text = f"{dept['name']} department: {dept.get('description', 'Medical specialty')}. Number of doctors: {dept.get('doctor_count', 0)}"
-                corpus_texts.append(text)
+            # Get recent appointments
+            recent_appointments_query = """
+            SELECT a.id, a.appointment_date, a.appointment_time, a.status,
+                   CONCAT(p.first_name, ' ', p.last_name) as patient_name, 
+                   CONCAT(d.first_name, ' ', d.last_name) as doctor_name,
+                   s.name as specialization
+            FROM appointments a
+            JOIN patients p ON a.patient_id = p.id
+            JOIN doctors d ON a.doctor_id = d.id
+            JOIN specializations s ON d.specialization_id = s.id
+            WHERE a.appointment_date >= CURRENT_DATE - INTERVAL '7 days'
+            ORDER BY a.appointment_date DESC, a.appointment_time DESC
+            LIMIT 20
+            """
+            recent_appointments = self._execute_query(recent_appointments_query) or []
             
-            # Add availability information
-            day_names = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
-            for slot in db_context.available_slots:
-                day_name = day_names[slot['day_of_week']]
-                text = f"Dr. {slot['doctor_name']} ({slot['specialization']}) is available on {day_name} from {slot['start_time']} to {slot['end_time']}"
-                corpus_texts.append(text)
-            
-            if not corpus_texts:
-                logger.warning("No database content found for vector store")
-                return
-            
-            # Generate embeddings
-            embeddings = self.embedding_model.encode(corpus_texts)
-            
-            # Create FAISS index
-            dimension = embeddings.shape[1]
-            self.vector_store = faiss.IndexFlatL2(dimension)
-            self.vector_store.add(embeddings.astype('float32'))
-            self.corpus_texts = corpus_texts
-            
-            logger.info(f"Initialized vector store with {len(corpus_texts)} documents")
-            
+            return DatabaseContext(
+                doctors=doctors,
+                departments=departments,
+                specializations=specializations,
+                recent_appointments=recent_appointments
+            )
         except Exception as e:
-            logger.error(f"Error initializing vector store: {e}")
-            self.vector_store = None
-    
-    def _get_relevant_context(self, query: str, k: int = 5) -> str:
-        """Get relevant context using RAG"""
-        if not RAG_AVAILABLE or not self.vector_store:
-            return ""
-        
-        try:
-            # Generate query embedding
-            query_embedding = self.embedding_model.encode([query])
-            
-            # Search for similar documents
-            distances, indices = self.vector_store.search(query_embedding.astype('float32'), k)
-            
-            # Get relevant texts
-            relevant_texts = []
-            for idx in indices[0]:
-                if idx < len(self.corpus_texts):
-                    relevant_texts.append(self.corpus_texts[idx])
-            
-            return "\n".join(relevant_texts)
-            
-        except Exception as e:
-            logger.error(f"Error in RAG retrieval: {e}")
-            return ""
-    
-    def get_conversation(self, session_id: str) -> List[Dict]:
-        """Get conversation history"""
-        return self.conversations.get(session_id, [])
+            logger.error(f"Error getting database context: {e}")
+            return DatabaseContext(doctors=[], departments=[], specializations=[], recent_appointments=[])
     
     def add_message(self, session_id: str, user_message: str, ai_response: str):
         """Add message to conversation history"""
@@ -747,15 +745,14 @@ def chat():
 
 @app.route('/api/appointments', methods=['GET'])
 def get_appointments():
-    """Get all appointments with corrected column names"""
+    """Get all appointments"""
     try:
         query = """
         SELECT a.id, a.appointment_date, a.appointment_time, a.status, a.reason_for_visit,
                CONCAT(p.first_name, ' ', p.last_name) as patient_name, 
                p.phone as patient_phone,
                CONCAT(d.first_name, ' ', d.last_name) as doctor_name, 
-               s.name as specialization,
-               s.name as department
+               s.name as specialization
         FROM appointments a
         JOIN patients p ON a.patient_id = p.id
         JOIN doctors d ON a.doctor_id = d.id
@@ -767,7 +764,7 @@ def get_appointments():
         appointments = execute_sql_query(query)
         
         if appointments is None:
-            return jsonify([])  # Return empty array if no appointments
+            return jsonify([])
         
         # Format appointments for frontend
         formatted_appointments = []
@@ -783,7 +780,7 @@ def get_appointments():
                 'patient_phone': apt['patient_phone'],
                 'doctor_name': apt['doctor_name'],
                 'specialization': apt['specialization'],
-                'department': apt['department']
+                'department': apt['specialization']  # Using specialization as department
             })
         
         return jsonify(formatted_appointments)
@@ -792,54 +789,276 @@ def get_appointments():
         logger.error(f"Error fetching appointments: {e}")
         return jsonify([])
 
+@app.route('/api/appointments', methods=['POST'])
+def create_appointment():
+    """Create a new appointment"""
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({
+                'success': False,
+                'message': 'Invalid request format'
+            }), 400
+        
+        # Extract required fields
+        patient_name = data.get('patient_name', '').strip()
+        doctor_id = data.get('doctor_id')
+        appointment_date = data.get('appointment_date')
+        appointment_time = data.get('appointment_time')
+        reason = data.get('reason', 'Consultation')
+        
+        # Validate required fields
+        if not all([patient_name, doctor_id, appointment_date, appointment_time]):
+            return jsonify({
+                'success': False,
+                'message': 'Missing required fields: patient_name, doctor_id, appointment_date, appointment_time'
+            }), 400
+        
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({
+                'success': False,
+                'message': 'Database connection failed'
+            }), 500
+        
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+                # Parse patient name
+                name_parts = patient_name.strip().split()
+                if len(name_parts) >= 2:
+                    first_name = name_parts[0]
+                    last_name = ' '.join(name_parts[1:])
+                else:
+                    first_name = name_parts[0]
+                    last_name = ''
+                
+                # Check if patient exists, create if not
+                cursor.execute(
+                    "SELECT id FROM patients WHERE LOWER(first_name) = LOWER(%s) AND LOWER(last_name) = LOWER(%s) LIMIT 1",
+                    (first_name, last_name)
+                )
+                existing_patient = cursor.fetchone()
+                
+                if existing_patient:
+                    patient_id = existing_patient['id']
+                else:
+                    # Create new patient
+                    default_phone = f"+1-555-{str(hash(patient_name))[-4:]}"
+                    cursor.execute("""
+                        INSERT INTO patients (first_name, last_name, phone, email, created_at)
+                        VALUES (%s, %s, %s, %s, %s)
+                        RETURNING id
+                    """, (
+                        first_name,
+                        last_name,
+                        data.get('phone', default_phone),
+                        data.get('email', f"{first_name.lower()}.{last_name.lower()}@example.com"),
+                        datetime.now()
+                    ))
+                    patient_id = cursor.fetchone()['id']
+                
+                # Validate doctor exists
+                cursor.execute(
+                    "SELECT id FROM doctors WHERE id = %s AND is_active = true",
+                    (doctor_id,)
+                )
+                if not cursor.fetchone():
+                    return jsonify({
+                        'success': False,
+                        'message': 'Invalid doctor ID'
+                    }), 400
+                
+                # Check for time conflicts
+                cursor.execute("""
+                    SELECT id FROM appointments 
+                    WHERE doctor_id = %s AND appointment_date = %s AND appointment_time = %s
+                    AND status NOT IN ('cancelled')
+                """, (doctor_id, appointment_date, appointment_time))
+                
+                if cursor.fetchone():
+                    return jsonify({
+                        'success': False,
+                        'message': 'Time slot already booked'
+                    }), 409
+                
+                # Create appointment
+                cursor.execute("""
+                    INSERT INTO appointments (patient_id, doctor_id, appointment_date, 
+                                            appointment_time, status, reason_for_visit, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                """, (
+                    patient_id,
+                    doctor_id,
+                    appointment_date,
+                    appointment_time,
+                    'scheduled',
+                    reason,
+                    datetime.now()
+                ))
+                
+                appointment_id = cursor.fetchone()['id']
+                conn.commit()
+                
+                return jsonify({
+                    'success': True,
+                    'message': 'Appointment created successfully',
+                    'appointment_id': appointment_id
+                })
+                
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"Error creating appointment: {e}")
+            return jsonify({
+                'success': False,
+                'message': f'Failed to create appointment: {str(e)}'
+            }), 500
+        finally:
+            conn.close()
+            
+    except Exception as e:
+        logger.error(f"Create appointment endpoint error: {e}")
+        return jsonify({
+            'success': False,
+            'message': 'An error occurred processing your request'
+        }), 500
+
+@app.route('/api/appointments/<int:appointment_id>', methods=['DELETE'])
+def cancel_appointment(appointment_id):
+    """Cancel an appointment"""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({
+                'success': False,
+                'message': 'Database connection failed'
+            }), 500
+        
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+                # Check if appointment exists
+                cursor.execute(
+                    "SELECT id FROM appointments WHERE id = %s",
+                    (appointment_id,)
+                )
+                if not cursor.fetchone():
+                    return jsonify({
+                        'success': False,
+                        'message': 'Appointment not found'
+                    }), 404
+                
+                # Update appointment status to cancelled
+                cursor.execute("""
+                    UPDATE appointments 
+                    SET status = 'cancelled', updated_at = %s
+                    WHERE id = %s
+                """, (datetime.now(), appointment_id))
+                
+                conn.commit()
+                
+                return jsonify({
+                    'success': True,
+                    'message': 'Appointment cancelled successfully'
+                })
+                
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"Error cancelling appointment: {e}")
+            return jsonify({
+                'success': False,
+                'message': f'Failed to cancel appointment: {str(e)}'
+            }), 500
+        finally:
+            conn.close()
+            
+    except Exception as e:
+        logger.error(f"Cancel appointment endpoint error: {e}")
+        return jsonify({
+            'success': False,
+            'message': 'An error occurred processing your request'
+        }), 500
+
 @app.route('/api/doctors', methods=['GET'])
 def get_doctors():
-    """Get all doctors with availability info and corrected column names"""
+    """Get all doctors with availability info"""
     try:
         specialty = request.args.get('specialty')
         
         query = """
         SELECT d.id, 
                CONCAT(d.first_name, ' ', d.last_name) as name,
-               s.name as specialization, 
-               d.experience_years, 
-               d.consultation_fee, 
-               d.phone, 
-               d.email,
-               s.name as department,
-               COUNT(da.id) as available_slots
-        FROM doctors d
-        JOIN specializations s ON d.specialization_id = s.id
-        LEFT JOIN doctor_availability da ON d.id = da.doctor_id 
-            AND da.is_active = true
+               d.first_name, d.last_name, d.email, d.phone,
+               d.experience_years, d.consultation_fee,
+               s.name as specialization, s.description as specialization_description
+        FROM doctors d 
+        LEFT JOIN specializations s ON d.specialization_id = s.id 
         WHERE d.is_active = true
         """
+        params = ()
         
-        params = []
         if specialty:
-            query += " AND s.name ILIKE %s"
-            params.append(f"%{specialty}%")
+            query += " AND LOWER(s.name) LIKE LOWER(%s)"
+            params = (f"%{specialty}%",)
         
-        query += " GROUP BY d.id, d.first_name, d.last_name, s.name, d.experience_years, d.consultation_fee, d.phone, d.email ORDER BY s.name, d.last_name"
+        query += " ORDER BY d.first_name, d.last_name"
         
-        doctors = execute_sql_query(query, tuple(params))
+        doctors = execute_sql_query(query, params)
         
-        return jsonify({
-            'doctors': doctors or [],
-            'success': True
-        })
+        if doctors is None:
+            return jsonify([])
+        
+        # Format doctors for frontend
+        formatted_doctors = []
+        for doctor in doctors:
+            formatted_doctors.append({
+                'id': doctor['id'],
+                'name': doctor['name'],
+                'first_name': doctor['first_name'],
+                'last_name': doctor['last_name'],
+                'specialization': doctor['specialization'],
+                'department': doctor['specialization'],
+                'phone': doctor['phone'],
+                'email': doctor['email'],
+                'experience_years': doctor['experience_years'],
+                'consultation_fee': float(doctor['consultation_fee']) if doctor['consultation_fee'] else None
+            })
+        
+        return jsonify(formatted_doctors)
         
     except Exception as e:
         logger.error(f"Error fetching doctors: {e}")
-        return jsonify({
-            'doctors': [],
-            'success': False,
-            'error': str(e)
-        }), 500
+        return jsonify([])
 
 @app.route('/api/departments', methods=['GET'])
 def get_departments():
-    """Get all departments (specializations) with corrected column names"""
+    """Get all departments with doctor counts"""
+    try:
+        query = """
+        SELECT d.id, d.name, d.description,
+               COUNT(doc.id) as doctor_count
+        FROM departments d
+        LEFT JOIN specializations s ON d.name = s.name
+        LEFT JOIN doctors doc ON s.id = doc.specialization_id AND doc.is_active = true
+        WHERE d.is_active = true
+        GROUP BY d.id, d.name, d.description
+        ORDER BY d.name
+        """
+        
+        departments = execute_sql_query(query)
+        
+        if departments is None:
+            return jsonify([])
+        
+        return jsonify([dict(dept) for dept in departments])
+        
+    except Exception as e:
+        logger.error(f"Error fetching departments: {e}")
+        return jsonify([])
+
+@app.route('/api/specializations', methods=['GET'])
+def get_specializations():
+    """Get all specializations with doctor counts"""
     try:
         query = """
         SELECT s.id, s.name, s.description,
@@ -850,124 +1069,288 @@ def get_departments():
         ORDER BY s.name
         """
         
-        departments = execute_sql_query(query)
+        specializations = execute_sql_query(query)
         
-        return jsonify({
-            'departments': departments or [],
-            'success': True
-        })
+        if specializations is None:
+            return jsonify([])
+        
+        return jsonify([dict(spec) for spec in specializations])
         
     except Exception as e:
-        logger.error(f"Error fetching departments: {e}")
-        return jsonify({
-            'departments': [],
-            'success': False,
-            'error': str(e)
-        }), 500
+        logger.error(f"Error fetching specializations: {e}")
+        return jsonify([])
 
 @app.route('/api/patients', methods=['GET'])
 def get_patients():
-    """Get all patients with corrected column names"""
+    """Get all patients"""
     try:
         query = """
-        SELECT p.id, 
-               CONCAT(p.first_name, ' ', p.last_name) as name,
-               p.email, p.phone, p.date_of_birth, p.gender,
-               p.address, p.emergency_contact_name, p.emergency_contact_phone,
-               p.is_active, p.created_at
-        FROM patients p
-        WHERE p.is_active = true
-        ORDER BY p.last_name, p.first_name
+        SELECT id, first_name, last_name, phone, email, date_of_birth, gender, created_at,
+               CONCAT(first_name, ' ', last_name) as name
+        FROM patients
+        WHERE is_active = true
+        ORDER BY first_name, last_name
         """
         
         patients = execute_sql_query(query)
         
-        return jsonify({
-            'patients': patients or [],
-            'success': True
-        })
+        if patients is None:
+            return jsonify([])
+        
+        # Format patients for frontend
+        formatted_patients = []
+        for patient in patients:
+            formatted_patients.append({
+                'id': patient['id'],
+                'name': patient['name'],
+                'first_name': patient['first_name'],
+                'last_name': patient['last_name'],
+                'phone': patient['phone'],
+                'email': patient['email'],
+                'date_of_birth': patient['date_of_birth'].isoformat() if patient['date_of_birth'] else None,
+                'gender': patient['gender'],
+                'created_at': patient['created_at'].isoformat() if patient['created_at'] else None
+            })
+        
+        return jsonify(formatted_patients)
         
     except Exception as e:
         logger.error(f"Error fetching patients: {e}")
+        return jsonify([])
+
+@app.route('/api/patients', methods=['POST'])
+def create_patient():
+    """Register a new patient"""
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({
+                'success': False,
+                'message': 'Invalid request format'
+            }), 400
+        
+        # Extract required fields
+        first_name = data.get('first_name', '').strip()
+        last_name = data.get('last_name', '').strip()
+        phone = data.get('phone', '').strip()
+        
+        if not all([first_name, last_name, phone]):
+            return jsonify({
+                'success': False,
+                'message': 'Missing required fields: first_name, last_name, phone'
+            }), 400
+        
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({
+                'success': False,
+                'message': 'Database connection failed'
+            }), 500
+        
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+                # Check if patient already exists
+                cursor.execute(
+                    "SELECT id FROM patients WHERE phone = %s",
+                    (phone,)
+                )
+                if cursor.fetchone():
+                    return jsonify({
+                        'success': False,
+                        'message': 'Patient with this phone number already exists'
+                    }), 409
+                
+                # Create new patient
+                cursor.execute("""
+                    INSERT INTO patients (first_name, last_name, phone, email, 
+                                        date_of_birth, gender, address, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                """, (
+                    first_name,
+                    last_name,
+                    phone,
+                    data.get('email'),
+                    data.get('date_of_birth'),
+                    data.get('gender'),
+                    data.get('address'),
+                    datetime.now()
+                ))
+                
+                patient_id = cursor.fetchone()['id']
+                conn.commit()
+                
+                return jsonify({
+                    'success': True,
+                    'message': 'Patient registered successfully',
+                    'patient_id': patient_id
+                })
+                
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"Error creating patient: {e}")
+            return jsonify({
+                'success': False,
+                'message': f'Failed to register patient: {str(e)}'
+            }), 500
+        finally:
+            conn.close()
+            
+    except Exception as e:
+        logger.error(f"Create patient endpoint error: {e}")
         return jsonify({
-            'patients': [],
             'success': False,
-            'error': str(e)
+            'message': 'An error occurred processing your request'
         }), 500
+
+@app.route('/api/doctor_schedule', methods=['GET'])
+def get_doctor_schedule():
+    """Get doctor availability schedules"""
+    try:
+        doctor_id = request.args.get('doctor_id')
+        date_param = request.args.get('date')
+        
+        query = """
+        SELECT ds.id, ds.doctor_id, ds.date, ds.start_time, ds.end_time, ds.is_available,
+               CONCAT(d.first_name, ' ', d.last_name) as doctor_name, 
+               s.name as specialization
+        FROM doctor_schedules ds
+        JOIN doctors d ON ds.doctor_id = d.id
+        JOIN specializations s ON d.specialization_id = s.id
+        WHERE d.is_active = true
+        """
+        params = []
+        
+        if doctor_id:
+            query += " AND ds.doctor_id = %s"
+            params.append(doctor_id)
+        
+        if date_param:
+            query += " AND ds.date = %s"
+            params.append(date_param)
+        else:
+            # Default to next 7 days
+            query += " AND ds.date >= CURRENT_DATE AND ds.date <= CURRENT_DATE + INTERVAL '7 days'"
+        
+        query += " ORDER BY ds.date, ds.start_time"
+        
+        schedules = execute_sql_query(query, tuple(params) if params else None)
+        
+        if schedules is None:
+            return jsonify([])
+        
+        # Format schedules for frontend
+        formatted_schedules = []
+        for schedule in schedules:
+            formatted_schedules.append({
+                'id': schedule['id'],
+                'doctor_id': schedule['doctor_id'],
+                'doctor_name': schedule['doctor_name'],
+                'specialization': schedule['specialization'],
+                'date': schedule['date'].isoformat() if schedule['date'] else None,
+                'start_time': str(schedule['start_time']) if schedule['start_time'] else None,
+                'end_time': str(schedule['end_time']) if schedule['end_time'] else None,
+                'is_available': schedule['is_available']
+            })
+        
+        return jsonify(formatted_schedules)
+        
+    except Exception as e:
+        logger.error(f"Error fetching doctor schedules: {e}")
+        return jsonify([])
+
+@app.route('/api/admin/appointments', methods=['GET'])
+def get_admin_appointments():
+    """Get all appointments with full details for admin"""
+    try:
+        query = """
+        SELECT a.id, a.appointment_date, a.appointment_time, a.status, 
+               a.reason_for_visit, a.notes, a.created_at,
+               CONCAT(p.first_name, ' ', p.last_name) as patient_name, 
+               p.phone as patient_phone, p.email as patient_email,
+               CONCAT(d.first_name, ' ', d.last_name) as doctor_name, 
+               s.name as specialization, d.phone as doctor_phone
+        FROM appointments a
+        JOIN patients p ON a.patient_id = p.id
+        JOIN doctors d ON a.doctor_id = d.id
+        JOIN specializations s ON d.specialization_id = s.id
+        ORDER BY a.appointment_date DESC, a.appointment_time DESC
+        """
+        
+        appointments = execute_sql_query(query)
+        
+        if appointments is None:
+            return jsonify([])
+        
+        # Format appointments for admin view
+        formatted_appointments = []
+        for apt in appointments:
+            formatted_appointments.append({
+                'id': apt['id'],
+                'appointment_date': apt['appointment_date'].isoformat() if apt['appointment_date'] else None,
+                'appointment_time': str(apt['appointment_time']) if apt['appointment_time'] else None,
+                'status': apt['status'],
+                'reason': apt['reason_for_visit'],
+                'notes': apt['notes'],
+                'created_at': apt['created_at'].isoformat() if apt['created_at'] else None,
+                'patient': {
+                    'name': apt['patient_name'],
+                    'phone': apt['patient_phone'],
+                    'email': apt['patient_email']
+                },
+                'doctor': {
+                    'name': apt['doctor_name'],
+                    'specialization': apt['specialization'],
+                    'phone': apt['doctor_phone']
+                }
+            })
+        
+        return jsonify(formatted_appointments)
+        
+    except Exception as e:
+        logger.error(f"Error fetching admin appointments: {e}")
+        return jsonify([])
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
     """Health check endpoint"""
     try:
         # Test database connection
-        db_status = execute_sql_query("SELECT 1 as test")
-        db_connected = db_status is not None
+        conn = get_db_connection()
+        db_status = "connected" if conn else "disconnected"
+        if conn:
+            conn.close()
         
-        # Test Bedrock connection if available
-        bedrock_connected = BEDROCK_AVAILABLE
-        if BEDROCK_AVAILABLE:
-            try:
-                bedrock_client = get_bedrock_client()
-                bedrock_connected = bedrock_client is not None
-            except:
-                bedrock_connected = False
+        # Check AI service
+        ai_status = "connected" if BEDROCK_AVAILABLE else "fallback_mode"
         
         return jsonify({
             'status': 'healthy',
-            'database': 'connected' if db_connected else 'disconnected',
-            'ai_service': 'connected' if bedrock_connected else 'disconnected',
+            'database': db_status,
+            'ai_service': ai_status,
             'rag_enabled': RAG_AVAILABLE,
             'bedrock_enabled': BEDROCK_AVAILABLE,
-            'vector_store': 'initialized' if conversation_manager.vector_store else 'not_initialized',
-            'timestamp': datetime.now().isoformat()
+            'vector_store': 'initialized' if conversation_manager.vector_store else 'not_available'
         })
         
     except Exception as e:
-        logger.error(f"Health check failed: {e}")
         return jsonify({
             'status': 'unhealthy',
-            'error': str(e),
-            'timestamp': datetime.now().isoformat()
+            'error': str(e)
         }), 500
 
-# Error handlers
-@app.errorhandler(404)
-def not_found(error):
-    return jsonify({
-        'error': 'Endpoint not found',
-        'success': False
-    }), 404
-
-@app.errorhandler(500)
-def internal_error(error):
-    return jsonify({
-        'error': 'Internal server error',
-        'success': False
-    }), 500
+# Legacy endpoint for compatibility
+@app.route('/ask', methods=['POST'])
+def ask():
+    """Legacy chat endpoint - redirects to /api/chat"""
+    return chat()
 
 if __name__ == '__main__':
-    logger.info("🚀 Starting Enhanced DocAI System")
-    logger.info("=" * 50)
+    logger.info("🏥 Starting Doc-AI Hospital Management System")
+    logger.info(f"✅ Database: {'Connected' if get_db_connection() else 'Not Connected'}")
+    logger.info(f"✅ AI Service: {'AWS Bedrock' if BEDROCK_AVAILABLE else 'Fallback Mode'}")
+    logger.info(f"✅ RAG System: {'Enabled' if RAG_AVAILABLE else 'Disabled'}")
+    logger.info("🚀 Server starting on http://localhost:8000")
     
-    # System status
-    logger.info(f"✅ Database integration: Enabled")
-    logger.info(f"{'✅' if RAG_AVAILABLE else '❌'} RAG capabilities: {'Enabled' if RAG_AVAILABLE else 'Disabled (install sentence-transformers faiss-cpu)'}")
-    logger.info(f"{'✅' if BEDROCK_AVAILABLE else '❌'} AWS Bedrock: {'Enabled' if BEDROCK_AVAILABLE else 'Disabled (check bedrock.py)'}")
-    
-    # Test system initialization
-    try:
-        db_context = conversation_manager._get_database_context()
-        logger.info(f"✅ Database context loaded: {len(db_context.doctors)} doctors, {len(db_context.departments)} departments")
-        
-        if conversation_manager.vector_store:
-            logger.info("✅ Vector store initialized for RAG")
-        else:
-            logger.warning("⚠️ Vector store not initialized - RAG features limited")
-            
-    except Exception as e:
-        logger.error(f"❌ System initialization error: {e}")
-    
-    logger.info("🌐 Starting server on http://localhost:8000")
-    logger.info("📱 Frontend should be available on http://localhost:5500")
-    
-    app.run(debug=True, host='0.0.0.0', port=8000)
+    app.run(host='0.0.0.0', port=8000, debug=True)
