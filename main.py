@@ -773,6 +773,7 @@ def get_appointments():
                 'id': apt['id'],
                 'date': apt['appointment_date'].isoformat() if apt['appointment_date'] else None,
                 'time': str(apt['appointment_time']) if apt['appointment_time'] else None,
+                'appointment_date': apt['appointment_date'].isoformat() if apt['appointment_date'] else None,
                 'appointment_time': str(apt['appointment_time']) if apt['appointment_time'] else 'Time TBD',
                 'status': apt['status'] or 'scheduled',
                 'reason': apt['reason_for_visit'],
