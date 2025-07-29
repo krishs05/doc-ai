@@ -272,25 +272,345 @@ class EnhancedConversationManager:
         
         self.conversations[session_id].append({
             'timestamp': datetime.now().isoformat(),
-            'user': user_message,
-            'ai': ai_response
+            'user_message': user_message,
+            'ai_response': ai_response
         })
         
-        # Keep only last 10 messages
-        self.conversations[session_id] = self.conversations[session_id][-10:]
+        # Keep only last 50 messages per session
+        if len(self.conversations[session_id]) > 50:
+            self.conversations[session_id] = self.conversations[session_id][-50:]
+    
+    def get_conversation(self, session_id: str) -> List[Dict]:
+        """Get conversation history"""
+        return self.conversations.get(session_id, [])
+    
+    def extract_appointment_details(self, message: str, conversation_history: List[Dict]) -> Dict:
+        """Extract appointment details from conversation"""
+        details = {}
+        
+        # Look for patient name
+        name_patterns = [
+            r"(?:name is|i'm|i am|my name is|call me)\s+([a-zA-Z\s]+)",
+            r"patient\s+(?:name\s+)?(?:is\s+)?([a-zA-Z\s]+)",
+            r"book.*for\s+([a-zA-Z\s]+)",
+            r"^([A-Z][a-z]+\s+[A-Z][a-z]+)(?:,|\s|$)"  # First Last name pattern
+        ]
+        
+        for pattern in name_patterns:
+            match = re.search(pattern, message, re.IGNORECASE)
+            if match:
+                potential_name = match.group(1).strip().title()
+                # Filter out common words that aren't names
+                if not any(word in potential_name.lower() for word in ['doctor', 'appointment', 'book', 'schedule', 'available']):
+                    details['patient_name'] = potential_name
+                    break
+        
+        # Look for date of birth
+        dob_patterns = [
+            r"(?:date of birth|dob|born).*?(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})",
+            r"(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})",
+            r"(\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2})"
+        ]
+        
+        for pattern in dob_patterns:
+            match = re.search(pattern, message, re.IGNORECASE)
+            if match:
+                details['date_of_birth'] = match.group(1)
+                break
+        
+        # Look for doctor preference
+        doctor_patterns = [
+            r"(?:with\s+)?(?:dr\.?\s+|doctor\s+)([a-zA-Z\s]+)",
+            r"(?:book.*with|see)\s+([a-zA-Z\s]+)"
+        ]
+        
+        for pattern in doctor_patterns:
+            match = re.search(pattern, message, re.IGNORECASE)
+            if match:
+                doctor_name = match.group(1).strip().title()
+                if 'smith' in doctor_name.lower():
+                    details['doctor_name'] = 'John Smith'
+                    details['doctor_id'] = 1  # Dr. John Smith has ID 1
+                break
+        
+        # Look for specialty preference
+        specialty_patterns = [
+            r"(cardiology|cardiologist|heart)",
+            r"(neurology|neurologist|brain)",
+            r"(orthopedics|orthopedic|bone|joint)",
+            r"(dermatology|dermatologist|skin)",
+            r"(pediatrics|pediatrician|child)"
+        ]
+        
+        for pattern in specialty_patterns:
+            match = re.search(pattern, message, re.IGNORECASE)
+            if match:
+                specialty = match.group(1).lower()
+                if 'cardio' in specialty:
+                    details['specialty'] = 'Cardiology'
+                    details['specialization_id'] = 1
+                elif 'neuro' in specialty:
+                    details['specialty'] = 'Neurology'
+                    details['specialization_id'] = 5
+                elif 'ortho' in specialty:
+                    details['specialty'] = 'Orthopedics'
+                    details['specialization_id'] = 4
+                elif 'derma' in specialty:
+                    details['specialty'] = 'Dermatology'
+                    details['specialization_id'] = 2
+                elif 'pediatr' in specialty:
+                    details['specialty'] = 'Pediatrics'
+                    details['specialization_id'] = 3
+                break
+        
+        # Look for day preference
+        day_patterns = [
+            r"(?:on\s+)?(?:this\s+|next\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)",
+            r"(?:prefer|like)\s+.*?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)"
+        ]
+        
+        for pattern in day_patterns:
+            match = re.search(pattern, message, re.IGNORECASE)
+            if match:
+                details['preferred_day'] = match.group(1).lower()
+                break
+        
+        # Look for time preference
+        time_patterns = [
+            r"(?:at\s+)?(\d{1,2}:?\d{0,2}\s*(?:am|pm|AM|PM))",
+            r"(morning|afternoon|evening)"
+        ]
+        
+        for pattern in time_patterns:
+            match = re.search(pattern, message, re.IGNORECASE)
+            if match:
+                details['preferred_time'] = match.group(1) if ':' in match.group(1) else match.group(0)
+                break
+        
+        # Look through conversation history for missing details
+        for msg in conversation_history[-5:]:  # Check last 5 messages
+            user_msg = msg.get('user_message', '').lower()
+            
+            if 'patient_name' not in details:
+                for pattern in name_patterns:
+                    match = re.search(pattern, user_msg, re.IGNORECASE)
+                    if match:
+                        potential_name = match.group(1).strip().title()
+                        if not any(word in potential_name.lower() for word in ['doctor', 'appointment', 'book', 'schedule', 'available']):
+                            details['patient_name'] = potential_name
+                            break
+            
+            if 'date_of_birth' not in details:
+                for pattern in dob_patterns:
+                    match = re.search(pattern, user_msg, re.IGNORECASE)
+                    if match:
+                        details['date_of_birth'] = match.group(1)
+                        break
+        
+        return details
+    
+    def book_appointment(self, details: Dict) -> Tuple[bool, str]:
+        """Book an appointment in the database"""
+        try:
+            conn = get_db_connection()
+            if not conn:
+                return False, "Database connection failed"
+            
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+                # First, check if patient exists or create new patient
+                patient_id = None
+                
+                if details.get('patient_name'):
+                    # Split name into first and last
+                    name_parts = details['patient_name'].strip().split()
+                    if len(name_parts) >= 2:
+                        first_name = name_parts[0]
+                        last_name = ' '.join(name_parts[1:])
+                    else:
+                        first_name = name_parts[0]
+                        last_name = ''
+                    
+                    # Check if patient exists
+                    cursor.execute(
+                        "SELECT id FROM patients WHERE LOWER(first_name) = LOWER(%s) AND LOWER(last_name) = LOWER(%s) LIMIT 1",
+                        (first_name, last_name)
+                    )
+                    existing_patient = cursor.fetchone()
+                    
+                    if existing_patient:
+                        patient_id = existing_patient['id']
+                    else:
+                        # Create new patient
+                        default_phone = f"+1-555-{str(hash(details['patient_name']))[-4:]}"
+                        cursor.execute("""
+                            INSERT INTO patients (first_name, last_name, phone, email, date_of_birth, created_at)
+                            VALUES (%s, %s, %s, %s, %s, %s)
+                            RETURNING id
+                        """, (
+                            first_name,
+                            last_name,
+                            details.get('phone', default_phone),
+                            details.get('email', f"{first_name.lower()}.{last_name.lower()}@example.com"),
+                            details.get('date_of_birth'),
+                            datetime.now()
+                        ))
+                        patient_id = cursor.fetchone()['id']
+                
+                if not patient_id:
+                    return False, "Could not create or find patient record"
+                
+                # Get doctor ID
+                doctor_id = details.get('doctor_id')
+                if not doctor_id:
+                    if details.get('specialty') or details.get('specialization_id'):
+                        # Find doctor by specialty
+                        spec_id = details.get('specialization_id')
+                        if spec_id:
+                            cursor.execute(
+                                "SELECT id FROM doctors WHERE specialization_id = %s AND is_active = true LIMIT 1",
+                                (spec_id,)
+                            )
+                        else:
+                            cursor.execute("""
+                                SELECT d.id FROM doctors d
+                                JOIN specializations s ON d.specialization_id = s.id
+                                WHERE s.name ILIKE %s AND d.is_active = true 
+                                LIMIT 1
+                            """, (f"%{details['specialty']}%",))
+                        
+                        doctor = cursor.fetchone()
+                        if doctor:
+                            doctor_id = doctor['id']
+                    
+                    if not doctor_id:
+                        # Default to first available doctor
+                        cursor.execute("SELECT id FROM doctors WHERE is_active = true LIMIT 1")
+                        doctor = cursor.fetchone()
+                        if doctor:
+                            doctor_id = doctor['id']
+                
+                # Determine appointment date
+                appointment_date = None
+                if details.get('preferred_day'):
+                    # Convert day name to date
+                    days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+                    today = date.today()
+                    today_weekday = today.weekday()
+                    target_weekday = days.index(details['preferred_day'].lower())
+                    
+                    days_ahead = target_weekday - today_weekday
+                    if days_ahead <= 0:  # Target day already passed this week
+                        days_ahead += 7
+                    
+                    appointment_date = today + timedelta(days=days_ahead)
+                else:
+                    # Default to tomorrow
+                    appointment_date = date.today() + timedelta(days=1)
+                
+                # Set appointment time
+                appointment_time = time(9, 0)  # Default to 9:00 AM
+                if details.get('preferred_time'):
+                    try:
+                        time_str = details['preferred_time'].upper().replace(' ', '')
+                        if 'AM' in time_str or 'PM' in time_str:
+                            time_part = time_str.replace('AM', '').replace('PM', '')
+                            if ':' in time_part:
+                                hour, minute = time_part.split(':')
+                                hour = int(hour)
+                                minute = int(minute)
+                            else:
+                                hour = int(time_part)
+                                minute = 0
+                            
+                            if 'PM' in time_str and hour != 12:
+                                hour += 12
+                            elif 'AM' in time_str and hour == 12:
+                                hour = 0
+                            
+                            appointment_time = time(hour, minute)
+                        elif 'morning' in details['preferred_time'].lower():
+                            appointment_time = time(9, 0)
+                        elif 'afternoon' in details['preferred_time'].lower():
+                            appointment_time = time(14, 0)
+                        elif 'evening' in details['preferred_time'].lower():
+                            appointment_time = time(17, 0)
+                    except:
+                        pass  # Keep default time if parsing fails
+                
+                # Create appointment
+                cursor.execute("""
+                    INSERT INTO appointments (patient_id, doctor_id, appointment_date, appointment_time, 
+                                            status, reason_for_visit, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                """, (
+                    patient_id,
+                    doctor_id,
+                    appointment_date,
+                    appointment_time,
+                    'scheduled',
+                    'Consultation',
+                    datetime.now()
+                ))
+                
+                appointment_id = cursor.fetchone()['id']
+                conn.commit()
+                
+                return True, f"Appointment booked successfully! Appointment ID: {appointment_id}"
+                
+        except Exception as e:
+            logger.error(f"Error booking appointment: {e}")
+            if conn:
+                conn.rollback()
+            return False, f"Failed to book appointment: {str(e)}"
+        finally:
+            if conn:
+                conn.close()
     
     def process_message(self, user_message: str, session_id: str) -> Dict:
-        """Process user message with enhanced AI and RAG"""
+        """Process user message with appointment booking capability"""
         try:
-            # Validate input
-            if not user_message or not user_message.strip():
+            if not user_message.strip():
                 return {
-                    'response': "I didn't receive a message. Could you please ask me something?",
+                    'response': "Could you please ask me something?",
                     'session_id': session_id,
                     'success': True
                 }
             
             user_message = user_message.strip()
+            
+            # Get conversation history
+            conversation_history = self.get_conversation(session_id)
+            
+            # Check if this looks like an appointment booking request
+            booking_keywords = ['book', 'appointment', 'schedule', 'reserve', 'see doctor', 'visit']
+            is_booking_request = any(keyword in user_message.lower() for keyword in booking_keywords)
+            
+            # Check if we have enough details to book
+            if is_booking_request or any('book' in msg.get('user_message', '').lower() for msg in conversation_history[-3:]):
+                appointment_details = self.extract_appointment_details(user_message, conversation_history)
+                
+                # If we have minimum required details, attempt booking
+                if appointment_details.get('patient_name') and appointment_details.get('date_of_birth'):
+                    success, booking_message = self.book_appointment(appointment_details)
+                    
+                    if success:
+                        response = f"Great! I've successfully booked your appointment. {booking_message}\n\nPlease arrive 15 minutes early to complete any necessary paperwork. If you need to reschedule or have any questions, feel free to ask!"
+                        self.add_message(session_id, user_message, response)
+                        return {
+                            'response': response,
+                            'session_id': session_id,
+                            'success': True,
+                            'appointment_booked': True
+                        }
+                    else:
+                        response = f"I encountered an issue while booking your appointment: {booking_message}. Please try again or contact our support team."
+                        self.add_message(session_id, user_message, response)
+                        return {
+                            'response': response,
+                            'session_id': session_id,
+                            'success': False
+                        }
             
             # Get database context
             db_context = self._get_database_context()
@@ -303,8 +623,11 @@ class EnhancedConversationManager:
 
 Current Database Context:
 - We have {len(db_context.doctors)} active doctors
-- Available specializations: {', '.join([d['name'] for d in db_context.departments])}
+- Available specializations: {', '.join([s['name'] for s in db_context.specializations])}
 - Recent appointments: {len(db_context.recent_appointments)} in the last week
+
+Our Doctors:
+{chr(10).join([f"- Dr. {d['name']} ({d['specialization']}) - {d['experience_years']} years experience" for d in db_context.doctors])}
 
 Relevant Information:
 {rag_context}
@@ -312,15 +635,18 @@ Relevant Information:
 You can help with:
 1. Finding doctors by specialty
 2. Checking availability 
-3. Booking appointments
+3. Booking appointments (collect: patient name, date of birth, preferred doctor/specialty, preferred time)
 4. General medical information
 5. Hospital information
 
-Be helpful, professional, and provide specific information when available. If you need to book an appointment, ask for necessary details like patient name, preferred doctor/specialty, and preferred time."""
+When booking appointments, always collect:
+- Patient full name (first and last name)
+- Date of birth (MM/DD/YYYY or DD/MM/YYYY format)
+- Preferred doctor or specialty
+- Preferred date/time
 
-            # Get conversation history
-            conversation_history = self.get_conversation(session_id)
-            
+Be helpful, professional, and provide specific information when available."""
+
             # Get AI response
             if BEDROCK_AVAILABLE:
                 ai_response = get_ai_response(system_prompt, user_message, conversation_history)
@@ -356,25 +682,21 @@ Be helpful, professional, and provide specific information when available. If yo
             if 'cardiologist' in user_lower or 'heart' in user_lower:
                 cardiologists = [d for d in db_context.doctors if 'cardio' in d['specialization'].lower()]
                 if cardiologists:
-                    doc_list = ', '.join([f"Dr. {d['name']}" for d in cardiologists[:3]])
-                    return f"We have several cardiologists available: {doc_list}. Would you like to book an appointment with any of them?"
-            
-            elif 'neurologist' in user_lower or 'brain' in user_lower:
-                neurologists = [d for d in db_context.doctors if 'neuro' in d['specialization'].lower()]
-                if neurologists:
-                    doc_list = ', '.join([f"Dr. {d['name']}" for d in neurologists[:3]])
-                    return f"Our neurology department has: {doc_list}. Which doctor would you prefer?"
-            
-            # General doctor list
-            return f"We have {len(db_context.doctors)} doctors available across {len(db_context.departments)} departments. What type of specialist are you looking for?"
+                    doc_list = ', '.join([f"Dr. {d['name']}" for d in cardiologists])
+                    return f"We have the following cardiologists available: {doc_list}. Would you like to book an appointment with any of them?"
+                else:
+                    return "I don't see any cardiologists in our current roster. Let me check our full doctor list for you."
+            else:
+                doc_list = ', '.join([f"Dr. {d['name']} ({d['specialization']})" for d in db_context.doctors[:5]])
+                return f"Here are some of our available doctors: {doc_list}. What type of doctor do you need to see?"
         
-        # Appointment booking
+        # Booking inquiry
         elif any(word in user_lower for word in ['book', 'appointment', 'schedule']):
-            return f"I'd be happy to help you book an appointment! We have {len(db_context.available_slots)} available slots. What type of doctor do you need to see?"
+            return "I'd be happy to help you book an appointment! To get started, I'll need:\n1. Your full name\n2. Your date of birth\n3. Which doctor or specialty you'd like to see\n4. Your preferred date and time\n\nPlease provide these details and I'll book your appointment."
         
         # Availability inquiry
         elif any(word in user_lower for word in ['available', 'availability', 'free', 'open']):
-            return f"We have doctors available across {len(db_context.departments)} specializations. What specialty are you interested in?"
+            return f"We have doctors available across {len(db_context.specializations)} specializations: {', '.join([s['name'] for s in db_context.specializations])}. What specialty are you interested in?"
         
         # Default response with context
         else:
