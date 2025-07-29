@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -146,6 +145,15 @@
             background: #e5e7eb;
         }
 
+        .btn-danger {
+            background: var(--danger);
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background: #dc2626;
+        }
+
         .btn-outline {
             background: transparent;
             color: var(--primary);
@@ -155,6 +163,11 @@
         .btn-outline:hover {
             background: var(--primary);
             color: white;
+        }
+
+        .btn-small {
+            padding: 0.5rem 1rem;
+            font-size: 0.875rem;
         }
 
         /* Hero Section */
@@ -305,6 +318,15 @@
             padding: 2rem;
         }
 
+        .appointments-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2rem;
+            flex-wrap: wrap;
+            gap: 1rem;
+        }
+
         .appointment-list {
             display: grid;
             gap: 1rem;
@@ -314,11 +336,12 @@
             display: grid;
             grid-template-columns: auto 1fr auto;
             gap: 1rem;
-            padding: 1rem;
+            padding: 1.5rem;
             border: 1px solid var(--border);
             border-radius: var(--radius);
             align-items: center;
             transition: var(--transition);
+            background: white;
         }
 
         .appointment-item:hover {
@@ -327,11 +350,103 @@
         }
 
         .appointment-date {
-            background: var(--primary-light);
+            background: var(--primary);
             color: white;
-            padding: 0.5rem 1rem;
+            padding: 1rem;
             border-radius: var(--radius);
             text-align: center;
+            min-width: 80px;
+        }
+
+        .appointment-date .month {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            opacity: 0.8;
+            margin-bottom: 0.25rem;
+        }
+
+        .appointment-date .day {
+            font-size: 1.5rem;
+            font-weight: 700;
+            line-height: 1;
+        }
+
+        .appointment-info h4 {
+            margin: 0 0 0.5rem 0;
+            color: var(--text-primary);
+        }
+
+        .appointment-info p {
+            margin: 0 0 0.25rem 0;
+            color: var(--text-secondary);
+            font-size: 0.875rem;
+        }
+
+        .appointment-actions {
+            display: flex;
+            gap: 0.5rem;
+            flex-direction: column;
+            align-items: flex-end;
+        }
+
+        .appointment-status {
+            padding: 0.25rem 0.75rem;
+            border-radius: 1rem;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            margin-bottom: 0.5rem;
+        }
+
+        .status-scheduled {
+            background: #dbeafe;
+            color: #1e40af;
+        }
+
+        .status-confirmed {
+            background: #d1fae5;
+            color: #047857;
+        }
+
+        .status-completed {
+            background: #f3e8ff;
+            color: #7c3aed;
+        }
+
+        .status-cancelled {
+            background: #fee2e2;
+            color: #dc2626;
+        }
+
+        /* Loading and Error States */
+        .loading-appointments, .error-appointments, .no-appointments {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 3rem;
+            text-align: center;
+        }
+
+        .loading-appointments i, .error-appointments i, .no-appointments i {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+            color: var(--text-secondary);
+        }
+
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 4px solid var(--border);
+            border-top: 4px solid var(--primary);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-bottom: 1rem;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
         }
 
         /* Chat Widget */
@@ -553,6 +668,22 @@
                 height: 100vh;
                 border-radius: 0;
             }
+
+            .appointment-item {
+                grid-template-columns: 1fr;
+                gap: 1rem;
+                text-align: center;
+            }
+            
+            .appointment-actions {
+                flex-direction: row;
+                justify-content: center;
+            }
+
+            .appointments-header {
+                flex-direction: column;
+                align-items: stretch;
+            }
         }
 
         /* Loading Animation */
@@ -700,10 +831,22 @@
                 <p>View and manage your upcoming appointments</p>
             </div>
             <div class="appointments-container">
+                <div class="appointments-header">
+                    <h3>Upcoming Appointments</h3>
+                    <div style="display: flex; gap: 0.5rem;">
+                        <button class="btn btn-secondary btn-small" onclick="refreshAppointments()">
+                            <i class="fas fa-refresh"></i> Refresh
+                        </button>
+                        <button class="btn btn-primary btn-small" onclick="openChat()">
+                            <i class="fas fa-plus"></i> Book New
+                        </button>
+                    </div>
+                </div>
                 <div id="appointmentsList" class="appointment-list">
-                    <p style="text-align: center; color: var(--text-secondary);">
-                        <i class="fas fa-spinner fa-spin"></i> Loading appointments...
-                    </p>
+                    <div class="loading-appointments">
+                        <div class="spinner"></div>
+                        <p>Loading appointments...</p>
+                    </div>
                 </div>
             </div>
         </div>
@@ -735,6 +878,19 @@
                 <button class="btn btn-primary" onclick="sendMessage()">
                     <i class="fas fa-paper-plane"></i>
                 </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Appointment Details Modal -->
+    <div id="appointmentModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="modalTitle">Appointment Details</h3>
+                <button class="modal-close" onclick="closeModal('appointmentModal')">&times;</button>
+            </div>
+            <div id="modalBody">
+                <!-- Modal content will be inserted here -->
             </div>
         </div>
     </div>
@@ -785,10 +941,76 @@
         let chatOpen = false;
         let sessionId = generateSessionId();
         let authMode = 'login';
+        let currentAppointments = [];
 
         // Generate unique session ID
         function generateSessionId() {
             return 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+        }
+
+        // Utility functions for date formatting
+        function formatDate(dateString) {
+            if (!dateString) return 'Date TBD';
+            
+            try {
+                const date = new Date(dateString);
+                if (isNaN(date.getTime())) return 'Invalid Date';
+                
+                return date.toLocaleDateString('en-US', {
+                    weekday: 'short',
+                    year: 'numeric',
+                    month: 'short',
+                    day: 'numeric'
+                });
+            } catch (error) {
+                console.error('Date formatting error:', error);
+                return 'Date Error';
+            }
+        }
+
+        function formatTime(timeString) {
+            if (!timeString) return 'Time TBD';
+            
+            try {
+                let date;
+                if (timeString.includes('T')) {
+                    date = new Date(timeString);
+                } else {
+                    date = new Date(`1970-01-01T${timeString}`);
+                }
+                
+                if (isNaN(date.getTime())) return timeString;
+                
+                return date.toLocaleTimeString('en-US', {
+                    hour: 'numeric',
+                    minute: '2-digit',
+                    hour12: true
+                });
+            } catch (error) {
+                console.error('Time formatting error:', error);
+                return timeString;
+            }
+        }
+
+        function getStatusClass(status) {
+            const statusMap = {
+                'scheduled': 'status-scheduled',
+                'confirmed': 'status-confirmed',
+                'completed': 'status-completed',
+                'cancelled': 'status-cancelled'
+            };
+            return statusMap[status] || 'status-scheduled';
+        }
+
+        function formatStatus(status) {
+            const statusMap = {
+                'scheduled': 'Scheduled',
+                'confirmed': 'Confirmed',
+                'completed': 'Completed',
+                'cancelled': 'Cancelled',
+                'no_show': 'No Show'
+            };
+            return statusMap[status] || status;
         }
 
         // Navigation
@@ -799,6 +1021,11 @@
                 this.classList.add('active');
                 const target = this.getAttribute('href').substring(1);
                 scrollToSection(target);
+                
+                // Load appointments when appointments section is accessed
+                if (target === 'appointments') {
+                    loadAppointments();
+                }
             });
         });
 
@@ -875,6 +1102,17 @@
                 
                 if (data.success) {
                     addMessage('ai', data.response);
+                    
+                    // Check if an appointment was booked
+                    if (data.appointment_booked) {
+                        console.log('Appointment was booked, refreshing appointments list...');
+                        showToast('Success', 'Appointment booked successfully!', 'success');
+                        
+                        // Refresh appointments list
+                        setTimeout(() => {
+                            loadAppointments();
+                        }, 1000);
+                    }
                 } else {
                     addMessage('ai', 'Sorry, I encountered an error. Please try again.');
                 }
@@ -914,55 +1152,214 @@
             if (indicator) indicator.remove();
         }
 
-        // Load appointments
+        // Load appointments with enhanced functionality
         async function loadAppointments() {
+            const container = document.getElementById('appointmentsList');
+            if (!container) return;
+
             try {
+                // Show loading state
+                container.innerHTML = `
+                    <div class="loading-appointments">
+                        <div class="spinner"></div>
+                        <p>Loading appointments...</p>
+                    </div>
+                `;
+
+                console.log('Loading appointments from: http://localhost:8000/api/appointments');
+                
                 const response = await fetch('http://localhost:8000/api/appointments');
-                const appointments = await response.json();
                 
-                const container = document.getElementById('appointmentsList');
-                
-                if (appointments.length === 0) {
-                    container.innerHTML = `
-                        <p style="text-align: center; color: var(--text-secondary);">
-                            No upcoming appointments. 
-                            <a href="#" onclick="openChat()" style="color: var(--primary);">Book one now!</a>
-                        </p>
-                    `;
-                } else {
-                    container.innerHTML = appointments.map(apt => `
-                        <div class="appointment-item">
-                            <div class="appointment-date">
-                                <div style="font-size: 0.875rem;">${new Date(apt.appointment_date).toLocaleDateString('en-US', { month: 'short' })}</div>
-                                <div style="font-size: 1.5rem; font-weight: 700;">${new Date(apt.appointment_date).getDate()}</div>
-                            </div>
-                            <div>
-                                <h4>Dr. ${apt.doctor_name}</h4>
-                                <p style="color: var(--text-secondary); margin: 0;">
-                                    ${apt.specialization} • ${apt.appointment_time}
-                                </p>
-                                <p style="color: var(--text-secondary); margin: 0;">
-                                    <i class="fas fa-user"></i> ${apt.patient_name}
-                                </p>
-                            </div>
-                            <div>
-                                <span class="btn btn-secondary" style="font-size: 0.875rem;">
-                                    ${apt.status}
-                                </span>
-                            </div>
-                        </div>
-                    `).join('');
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
                 }
+                
+                const appointments = await response.json();
+                console.log('Loaded appointments:', appointments);
+                
+                currentAppointments = appointments; // Store for later use
+                displayAppointments(appointments);
+                
             } catch (error) {
-                document.getElementById('appointmentsList').innerHTML = `
-                    <p style="text-align: center; color: var(--danger);">
-                        Failed to load appointments. Please check if the server is running.
-                    </p>
+                console.error('Error loading appointments:', error);
+                container.innerHTML = `
+                    <div class="error-appointments">
+                        <i class="fas fa-exclamation-triangle"></i>
+                        <h3>Unable to load appointments</h3>
+                        <p>There was an error loading your appointments. Please try again.</p>
+                        <button class="btn btn-primary" onclick="loadAppointments()">
+                            <i class="fas fa-retry"></i>
+                            Try Again
+                        </button>
+                    </div>
                 `;
             }
         }
 
-        // Auth functions
+        function displayAppointments(appointments) {
+            const container = document.getElementById('appointmentsList');
+            if (!container) return;
+
+            if (appointments.length === 0) {
+                container.innerHTML = `
+                    <div class="no-appointments">
+                        <i class="fas fa-calendar-plus"></i>
+                        <h3>No appointments scheduled</h3>
+                        <p>Book your first appointment with our AI assistant!</p>
+                        <button class="btn btn-primary" onclick="openChat()">
+                            <i class="fas fa-plus"></i>
+                            Book Appointment
+                        </button>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = appointments.map(apt => {
+                const appointmentDate = apt.date || apt.appointment_date;
+                const appointmentTime = apt.time || apt.appointment_time;
+                
+                return `
+                    <div class="appointment-item" data-appointment-id="${apt.id}">
+                        <div class="appointment-date">
+                            <div class="month">${formatDate(appointmentDate).split(' ')[1]} ${formatDate(appointmentDate).split(' ')[2]}</div>
+                            <div class="day">${formatDate(appointmentDate).split(' ')[3] || formatDate(appointmentDate).split(' ')[2]}</div>
+                        </div>
+                        <div class="appointment-info">
+                            <h4>Dr. ${apt.doctor_name}</h4>
+                            <p><i class="fas fa-stethoscope"></i> ${apt.specialization || apt.department}</p>
+                            <p><i class="fas fa-clock"></i> ${formatTime(appointmentTime)}</p>
+                            <p><i class="fas fa-user"></i> ${apt.patient_name}</p>
+                            ${apt.reason ? `<p><i class="fas fa-notes-medical"></i> ${apt.reason}</p>` : ''}
+                        </div>
+                        <div class="appointment-actions">
+                            <span class="appointment-status ${getStatusClass(apt.status)}">${formatStatus(apt.status)}</span>
+                            <button class="btn btn-secondary btn-small" onclick="viewAppointment(${apt.id})">
+                                <i class="fas fa-eye"></i> View
+                            </button>
+                            ${apt.status !== 'cancelled' && apt.status !== 'completed' ? `
+                                <button class="btn btn-secondary btn-small" onclick="rescheduleAppointment(${apt.id})">
+                                    <i class="fas fa-calendar-alt"></i> Reschedule
+                                </button>
+                                <button class="btn btn-danger btn-small" onclick="cancelAppointment(${apt.id})">
+                                    <i class="fas fa-times"></i> Cancel
+                                </button>
+                            ` : ''}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        // Appointment management functions
+        function viewAppointment(appointmentId) {
+            const appointment = currentAppointments.find(apt => apt.id === appointmentId);
+            if (!appointment) return;
+
+            const modal = document.getElementById('appointmentModal');
+            const modalTitle = document.getElementById('modalTitle');
+            const modalBody = document.getElementById('modalBody');
+
+            modalTitle.textContent = `Appointment #${appointmentId}`;
+            modalBody.innerHTML = `
+                <div style="display: grid; gap: 1rem;">
+                    <div>
+                        <strong>Patient:</strong> 
+                        <span>${appointment.patient_name}</span>
+                    </div>
+                    <div>
+                        <strong>Doctor:</strong> 
+                        <span>Dr. ${appointment.doctor_name}</span>
+                    </div>
+                    <div>
+                        <strong>Specialty:</strong> 
+                        <span>${appointment.specialization || appointment.department}</span>
+                    </div>
+                    <div>
+                        <strong>Date:</strong> 
+                        <span>${formatDate(appointment.date || appointment.appointment_date)}</span>
+                    </div>
+                    <div>
+                        <strong>Time:</strong> 
+                        <span>${formatTime(appointment.time || appointment.appointment_time)}</span>
+                    </div>
+                    <div>
+                        <strong>Status:</strong> 
+                        <span class="appointment-status ${getStatusClass(appointment.status)}">${formatStatus(appointment.status)}</span>
+                    </div>
+                    ${appointment.reason ? `
+                        <div>
+                            <strong>Reason:</strong> 
+                            <span>${appointment.reason}</span>
+                        </div>
+                    ` : ''}
+                    ${appointment.patient_phone ? `
+                        <div>
+                            <strong>Phone:</strong> 
+                            <span>${appointment.patient_phone}</span>
+                        </div>
+                    ` : ''}
+                    ${appointment.status !== 'cancelled' && appointment.status !== 'completed' ? `
+                        <div style="margin-top: 1rem; display: flex; gap: 0.5rem; justify-content: flex-end;">
+                            <button class="btn btn-secondary" onclick="rescheduleAppointment(${appointmentId}); closeModal('appointmentModal')">
+                                <i class="fas fa-calendar-alt"></i> Reschedule
+                            </button>
+                            <button class="btn btn-danger" onclick="cancelAppointment(${appointmentId}); closeModal('appointmentModal')">
+                                <i class="fas fa-times"></i> Cancel
+                            </button>
+                        </div>
+                    ` : ''}
+                </div>
+            `;
+
+            modal.classList.add('active');
+        }
+
+        async function cancelAppointment(appointmentId) {
+            if (!confirm('Are you sure you want to cancel this appointment?')) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`http://localhost:8000/api/appointments/${appointmentId}`, {
+                    method: 'DELETE',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    }
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    showToast('Success', 'Appointment cancelled successfully!', 'success');
+                    loadAppointments(); // Refresh the appointments list
+                } else {
+                    showToast('Error', result.message || 'Failed to cancel appointment', 'error');
+                }
+            } catch (error) {
+                console.error('Error cancelling appointment:', error);
+                showToast('Error', 'Failed to connect to server', 'error');
+            }
+        }
+
+        function rescheduleAppointment(appointmentId) {
+            closeModal('appointmentModal');
+            openChat();
+            setTimeout(() => {
+                const input = document.getElementById('chatInput');
+                if (input) {
+                    input.value = `I need to reschedule appointment #${appointmentId}`;
+                    sendMessage();
+                }
+            }, 500);
+        }
+
+        async function refreshAppointments() {
+            await loadAppointments();
+            showToast('Success', 'Appointments refreshed successfully!', 'success');
+        }
+
+        // Modal functions
         function openAuthModal(mode) {
             authMode = mode || 'login';
             updateAuthModal();
@@ -1061,7 +1458,11 @@
             
             setTimeout(() => {
                 toast.style.animation = 'slideOutRight 0.3s ease';
-                setTimeout(() => toast.remove(), 300);
+                setTimeout(() => {
+                    if (toast.parentNode) {
+                        toast.parentNode.removeChild(toast);
+                    }
+                }, 300);
             }, 3000);
         }
 
