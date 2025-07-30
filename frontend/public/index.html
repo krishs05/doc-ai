@@ -1166,20 +1166,44 @@
                     </div>
                 `;
 
-                console.log('Loading appointments from: http://localhost:8000/api/appointments');
-                
-                const response = await fetch('http://localhost:8000/api/appointments');
-                
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
+                // Try to get user info from localStorage
+                let user = null;
+                try {
+                    user = JSON.parse(localStorage.getItem('user'));
+                } catch (e) { user = null; }
+
+                let appointments = [];
+                if (user && user.name && user.date_of_birth) {
+                    // Use patient-specific endpoint
+                    console.log('Loading appointments for user:', user.name, user.date_of_birth);
+                    const response = await fetch('http://localhost:8000/api/appointments/patient', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            patient_name: user.name,
+                            date_of_birth: user.date_of_birth
+                        })
+                    });
+                    const data = await response.json();
+                    if (data.success) {
+                        appointments = data.appointments;
+                    } else {
+                        throw new Error(data.message || 'Failed to load patient appointments');
+                    }
+                } else {
+                    // Fallback: load all appointments
+                    console.log('Loading appointments from: http://localhost:8000/api/appointments');
+                    const response = await fetch('http://localhost:8000/api/appointments');
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    appointments = await response.json();
                 }
-                
-                const appointments = await response.json();
+
                 console.log('Loaded appointments:', appointments);
-                
                 currentAppointments = appointments; // Store for later use
                 displayAppointments(appointments);
-                
+
             } catch (error) {
                 console.error('Error loading appointments:', error);
                 container.innerHTML = `

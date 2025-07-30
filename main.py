@@ -11,6 +11,8 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
 import re
+import calendar
+from datetime import datetime as dt
 
 # Load environment variables
 load_dotenv()
@@ -361,29 +363,71 @@ class EnhancedConversationManager:
                     details['specialization_id'] = 3
                 break
         
-        # Look for day preference
-        day_patterns = [
-            r"(?:on\s+)?(?:this\s+|next\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)",
-            r"(?:prefer|like)\s+.*?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)"
+        # --- Further enhanced date and time extraction ---
+        try:
+            from dateutil import parser as dateutil_parser
+        except ImportError:
+            dateutil_parser = None
+        
+        # Patterns for relative and absolute dates
+        relative_patterns = [
+            (r"tomorrow", 1),
+            (r"day after tomorrow", 2),
+            (r"in (\d+) days", None),
+            (r"next (monday|tuesday|wednesday|thursday|friday|saturday|sunday)", None),
+            (r"this (monday|tuesday|wednesday|thursday|friday|saturday|sunday)", None),
+            (r"the (\d{1,2})(?:st|nd|rd|th)?(?: at|,|\s)", None),
         ]
-        
-        for pattern in day_patterns:
-            match = re.search(pattern, message, re.IGNORECASE)
+        today = date.today()
+        for pat, days_ahead in relative_patterns:
+            match = re.search(pat, message, re.IGNORECASE)
             if match:
-                details['preferred_day'] = match.group(1).lower()
+                if pat == "tomorrow":
+                    details['appointment_date'] = (today + timedelta(days=1)).isoformat()
+                elif pat == "day after tomorrow":
+                    details['appointment_date'] = (today + timedelta(days=2)).isoformat()
+                elif pat == "in (\d+) days":
+                    n = int(match.group(1))
+                    details['appointment_date'] = (today + timedelta(days=n)).isoformat()
+                elif pat.startswith("next") or pat.startswith("this"):
+                    day_name = match.group(1).lower()
+                    days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+                    today_weekday = today.weekday()
+                    target_weekday = days.index(day_name)
+                    days_ahead = (target_weekday - today_weekday + (7 if pat.startswith("next") else 0)) % 7
+                    if days_ahead == 0 and pat.startswith("next"):
+                        days_ahead = 7
+                    details['appointment_date'] = (today + timedelta(days=days_ahead)).isoformat()
+                elif pat.startswith("the"):
+                    daynum = int(match.group(1))
+                    month = today.month
+                    year = today.year
+                    try:
+                        dt_obj = date(year, month, daynum)
+                    except ValueError:
+                        # If day has passed, try next month
+                        month += 1
+                        if month > 12:
+                            month = 1
+                            year += 1
+                        dt_obj = date(year, month, daynum)
+                    details['appointment_date'] = dt_obj.isoformat()
                 break
-        
-        # Look for time preference
-        time_patterns = [
-            r"(?:at\s+)?(\d{1,2}:?\d{0,2}\s*(?:am|pm|AM|PM))",
-            r"(morning|afternoon|evening)"
-        ]
-        
-        for pattern in time_patterns:
-            match = re.search(pattern, message, re.IGNORECASE)
-            if match:
-                details['preferred_time'] = match.group(1) if ':' in match.group(1) else match.group(0)
-                break
+        # 24-hour time
+        time_24_pattern = r"(\d{1,2}:\d{2})"
+        match = re.search(time_24_pattern, message)
+        if match:
+            details['preferred_time'] = match.group(1)
+        # Fallback: use dateutil.parser if available
+        if dateutil_parser:
+            try:
+                dt_obj = dateutil_parser.parse(message, fuzzy=True, default=dt.combine(today, time(9,0)))
+                if 'appointment_date' not in details:
+                    details['appointment_date'] = dt_obj.date().isoformat()
+                if 'preferred_time' not in details and (dt_obj.hour != 9 or dt_obj.minute != 0):
+                    details['preferred_time'] = dt_obj.strftime('%I:%M %p')
+            except Exception:
+                pass
         
         # Look through conversation history for missing details
         for msg in conversation_history[-5:]:  # Check last 5 messages
@@ -489,17 +533,21 @@ class EnhancedConversationManager:
                 
                 # Determine appointment date
                 appointment_date = None
-                if details.get('preferred_day'):
+                if details.get('appointment_date'):
+                    try:
+                        # Use extracted date (already in ISO format)
+                        appointment_date = dt.strptime(details['appointment_date'], "%Y-%m-%d").date()
+                    except Exception:
+                        appointment_date = None
+                elif details.get('preferred_day'):
                     # Convert day name to date
                     days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
                     today = date.today()
                     today_weekday = today.weekday()
                     target_weekday = days.index(details['preferred_day'].lower())
-                    
                     days_ahead = target_weekday - today_weekday
                     if days_ahead <= 0:  # Target day already passed this week
                         days_ahead += 7
-                    
                     appointment_date = today + timedelta(days=days_ahead)
                 else:
                     # Default to tomorrow
@@ -534,6 +582,15 @@ class EnhancedConversationManager:
                             appointment_time = time(17, 0)
                     except:
                         pass  # Keep default time if parsing fails
+                
+                # Check for time conflicts before booking
+                cursor.execute("""
+                    SELECT id FROM appointments 
+                    WHERE doctor_id = %s AND appointment_date = %s AND appointment_time = %s
+                    AND status NOT IN ('cancelled')
+                """, (doctor_id, appointment_date, appointment_time))
+                if cursor.fetchone():
+                    return False, f"The selected time slot ({appointment_date} at {appointment_time.strftime('%I:%M %p')}) is already booked for this doctor. Please choose a different time."
                 
                 # Create appointment
                 cursor.execute("""
@@ -579,6 +636,70 @@ class EnhancedConversationManager:
             
             # Get conversation history
             conversation_history = self.get_conversation(session_id)
+
+            # Check if this looks like an appointment inquiry (not booking)
+            inquiry_keywords = [
+                'when is my appointment', 'my appointment', 'upcoming appointment', 'next appointment',
+                'do i have an appointment', 'future appointment', 'scheduled appointment', 'show my appointment', 'any appointment for me'
+            ]
+            is_inquiry = any(kw in user_message.lower() for kw in inquiry_keywords)
+            
+            if is_inquiry:
+                # Try to extract patient name and date of birth from message or conversation history
+                details = self.extract_appointment_details(user_message, conversation_history)
+                patient_name = details.get('patient_name')
+                date_of_birth = details.get('date_of_birth')
+                if not patient_name or not date_of_birth:
+                    # Try to get from recent conversation
+                    for msg in reversed(conversation_history):
+                        if not patient_name:
+                            d = self.extract_appointment_details(msg.get('user_message', ''), [])
+                            if d.get('patient_name'):
+                                patient_name = d['patient_name']
+                        if not date_of_birth:
+                            d = self.extract_appointment_details(msg.get('user_message', ''), [])
+                            if d.get('date_of_birth'):
+                                date_of_birth = d['date_of_birth']
+                        if patient_name and date_of_birth:
+                            break
+                if patient_name and date_of_birth:
+                    appointments = self.get_upcoming_appointments(patient_name, date_of_birth)
+                    if appointments:
+                        response_lines = [
+                            f"You have {len(appointments)} upcoming appointment(s):"
+                        ]
+                        for apt in appointments:
+                            date_str = apt['appointment_date'].isoformat() if hasattr(apt['appointment_date'], 'isoformat') else str(apt['appointment_date'])
+                            time_str = str(apt['appointment_time'])
+                            response_lines.append(
+                                f"- {date_str} at {time_str} with Dr. {apt['doctor_name']} ({apt['specialization']}) for {apt['reason_for_visit']} [Status: {apt['status']}]"
+                            )
+                        response = "\n".join(response_lines)
+                        self.add_message(session_id, user_message, response)
+                        return {
+                            'response': response,
+                            'session_id': session_id,
+                            'success': True,
+                            'appointments_found': True
+                        }
+                    else:
+                        response = "I couldn't find any upcoming appointments for you. If you think this is a mistake, please check your details or book a new appointment."
+                        self.add_message(session_id, user_message, response)
+                        return {
+                            'response': response,
+                            'session_id': session_id,
+                            'success': True,
+                            'appointments_found': False
+                        }
+                else:
+                    response = "To look up your appointments, please provide your full name and date of birth."
+                    self.add_message(session_id, user_message, response)
+                    return {
+                        'response': response,
+                        'session_id': session_id,
+                        'success': False,
+                        'appointments_found': False
+                    }
             
             # Check if this looks like an appointment booking request
             booking_keywords = ['book', 'appointment', 'schedule', 'reserve', 'see doctor', 'visit']
@@ -699,6 +820,53 @@ Be helpful, professional, and provide specific information when available."""
         # Default response with context
         else:
             return f"Hello! I'm your AI healthcare assistant. I can help you book appointments with our {len(db_context.doctors)} doctors, find specialists, or answer health questions. How can I assist you today?"
+
+    def get_upcoming_appointments(self, patient_name: str, date_of_birth: str) -> list:
+        """Fetch upcoming appointments for a patient by name and date of birth"""
+        try:
+            conn = get_db_connection()
+            if not conn:
+                return []
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+                # Split name into first and last
+                name_parts = patient_name.strip().split()
+                if len(name_parts) >= 2:
+                    first_name = name_parts[0]
+                    last_name = ' '.join(name_parts[1:])
+                else:
+                    first_name = name_parts[0]
+                    last_name = ''
+                # Find patient by name and date_of_birth
+                cursor.execute(
+                    "SELECT id FROM patients WHERE LOWER(first_name) = LOWER(%s) AND LOWER(last_name) = LOWER(%s) AND date_of_birth = %s LIMIT 1",
+                    (first_name, last_name, date_of_birth)
+                )
+                patient = cursor.fetchone()
+                if not patient:
+                    return []
+                patient_id = patient['id']
+                # Fetch upcoming appointments
+                cursor.execute(
+                    """
+                    SELECT a.id, a.appointment_date, a.appointment_time, a.status, a.reason_for_visit,
+                           CONCAT(d.first_name, ' ', d.last_name) as doctor_name, s.name as specialization
+                    FROM appointments a
+                    JOIN doctors d ON a.doctor_id = d.id
+                    JOIN specializations s ON d.specialization_id = s.id
+                    WHERE a.patient_id = %s AND a.appointment_date >= CURRENT_DATE AND a.status NOT IN ('cancelled')
+                    ORDER BY a.appointment_date ASC, a.appointment_time ASC
+                    LIMIT 5
+                    """,
+                    (patient_id,)
+                )
+                appointments = cursor.fetchall()
+                return [dict(row) for row in appointments]
+        except Exception as e:
+            logger.error(f"Error fetching upcoming appointments: {e}")
+            return []
+        finally:
+            if 'conn' in locals() and conn:
+                conn.close()
 
 # Initialize the conversation manager
 conversation_manager = EnhancedConversationManager()
@@ -1312,6 +1480,35 @@ def get_admin_appointments():
     except Exception as e:
         logger.error(f"Error fetching admin appointments: {e}")
         return jsonify([])
+
+@app.route('/api/appointments/patient', methods=['POST'])
+def get_patient_appointments():
+    """Get upcoming appointments for a specific patient by name and date of birth"""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({
+                'success': False,
+                'message': 'Invalid request format'
+            }), 400
+        patient_name = data.get('patient_name', '').strip()
+        date_of_birth = data.get('date_of_birth', '').strip()
+        if not patient_name or not date_of_birth:
+            return jsonify({
+                'success': False,
+                'message': 'Missing required fields: patient_name, date_of_birth'
+            }), 400
+        appointments = conversation_manager.get_upcoming_appointments(patient_name, date_of_birth)
+        return jsonify({
+            'success': True,
+            'appointments': appointments
+        })
+    except Exception as e:
+        logger.error(f"Error fetching patient appointments: {e}")
+        return jsonify({
+            'success': False,
+            'message': 'An error occurred processing your request'
+        }), 500
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
