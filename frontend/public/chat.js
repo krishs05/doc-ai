@@ -83,7 +83,7 @@ class ChatInterface {
     initializeChat() {
         setTimeout(() => {
             this.addMessage(
-                "Hello! I'm your AI healthcare assistant. I can help you book appointments with our doctors. What would you like to do today?\n\n• Book a new appointment\n• Find available doctors\n• Get help with scheduling",
+                "👋 Hello! I'm your AI healthcare assistant. I can help you:\n\n• Book appointments with our doctors\n• Check doctor availability and schedules\n• Find specialists for your medical needs\n• Look up your existing appointments\n• Answer general health questions\n\nHow can I assist you today?",
                 'ai'
             );
         }, 500);
