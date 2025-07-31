@@ -50,10 +50,28 @@ def get_ai_response(system_prompt, user_message, conversation_history=None):
         "content": user_message.strip()
     })
     
+    # Enhanced system prompt to prevent fake responses
+    enhanced_system_prompt = system_prompt + """
+
+IMPORTANT: You are connected to a real hospital database. Follow these critical rules:
+
+1. **DO NOT GENERATE FAKE APPOINTMENT DATA**: If the user asks about appointments, availability, or booking, let the system handle the actual database queries. Do not make up appointment times, doctor names, or availability.
+
+2. **BE HONEST ABOUT CAPABILITIES**: If you don't have access to specific information, say so clearly. Don't pretend to have information you don't have.
+
+3. **ENCOURAGE DATABASE QUERIES**: When users ask about appointments, availability, or booking, guide them to provide the information needed for the system to query the database.
+
+4. **AVOID HALLUCINATIONS**: Do not generate fake doctor names, appointment times, or medical information. Let the real database provide this information.
+
+5. **FOCUS ON CONVERSATION FLOW**: Help gather information needed for booking (name, DOB, specialty, preferences) and let the system handle the actual database operations.
+
+Remember: Your role is to facilitate the conversation and information gathering, not to generate fake medical data or appointments.
+"""
+    
     body = {
         "anthropic_version": "bedrock-2023-05-31",
         "max_tokens": 1000,
-        "system": system_prompt.strip(),
+        "system": enhanced_system_prompt.strip(),
         "messages": messages,
         "temperature": 0.7
     }
