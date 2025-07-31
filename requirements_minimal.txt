@@ -1,0 +1,24 @@
+# Minimal requirements for core functionality
+# Install these in order to avoid conflicts
+
+# Core Web Framework
+flask==3.0.0
+flask-cors==4.0.0
+
+# Environment and utilities  
+python-dotenv==1.0.1
+python-dateutil==2.9.0
+
+# Database
+psycopg2-binary==2.9.9
+
+# AWS and Bedrock
+boto3==1.35.40
+botocore==1.35.40
+
+# Pydantic for data validation
+pydantic==2.10.3
+
+# Basic utilities
+requests==2.32.3
+urllib3==2.2.3

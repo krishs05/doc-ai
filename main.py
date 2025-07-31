@@ -108,9 +108,25 @@ REDIS_CONFIG = {
 # Try importing AWS Bedrock
 try:
     import boto3
-    bedrock_runtime = boto3.client('bedrock-runtime', region_name=os.getenv('AWS_REGION', 'us-east-1'))
-    BEDROCK_AVAILABLE = True
-    logger.info("✅ AWS Bedrock: Available")
+    # Check if AWS credentials are available
+    aws_access_key = os.getenv('AWS_ACCESS_KEY_ID')
+    aws_secret_key = os.getenv('AWS_SECRET_ACCESS_KEY')
+    aws_region = os.getenv('AWS_REGION', 'us-east-1')
+    
+    if aws_access_key and aws_secret_key:
+        bedrock_runtime = boto3.client(
+            'bedrock-runtime', 
+            region_name=aws_region,
+            aws_access_key_id=aws_access_key,
+            aws_secret_access_key=aws_secret_key
+        )
+        BEDROCK_AVAILABLE = True
+        logger.info("✅ AWS Bedrock: Available")
+    else:
+        # Try using default credentials (AWS CLI, IAM roles, etc.)
+        bedrock_runtime = boto3.client('bedrock-runtime', region_name=aws_region)
+        BEDROCK_AVAILABLE = True
+        logger.info("✅ AWS Bedrock: Available (using default credentials)")
 except Exception as e:
     BEDROCK_AVAILABLE = False
     logger.warning(f"❌ AWS Bedrock: Not available - {e}")
@@ -617,10 +633,26 @@ class ClaudeBedrockLLM:
     
     def __init__(self):
         # Use the official ChatBedrock from langchain-aws
-        self.chat_bedrock = ChatBedrock(
-            model="anthropic.claude-3-sonnet-20240229-v1:0",
-            beta_use_converse_api=True
-        )
+        aws_access_key = os.getenv('AWS_ACCESS_KEY_ID')
+        aws_secret_key = os.getenv('AWS_SECRET_ACCESS_KEY')
+        aws_region = os.getenv('AWS_REGION', 'us-east-1')
+        
+        # Initialize ChatBedrock with credentials if available
+        if aws_access_key and aws_secret_key:
+            self.chat_bedrock = ChatBedrock(
+                model="anthropic.claude-3-sonnet-20240229-v1:0",
+                region_name=aws_region,
+                aws_access_key_id=aws_access_key,
+                aws_secret_access_key=aws_secret_key,
+                beta_use_converse_api=True
+            )
+        else:
+            # Use default credentials
+            self.chat_bedrock = ChatBedrock(
+                model="anthropic.claude-3-sonnet-20240229-v1:0",
+                region_name=aws_region,
+                beta_use_converse_api=True
+            )
     
     @property
     def _llm_type(self) -> str:
@@ -629,9 +661,39 @@ class ClaudeBedrockLLM:
     def invoke(self, messages):
         """Generate response using official ChatBedrock"""
         try:
-            # Use the official ChatBedrock
-            response = self.chat_bedrock.invoke(messages)
-            return response
+            # Check if tools are bound
+            if hasattr(self, 'tools') and self.tools:
+                # Use tools-based approach
+                from langchain_core.prompts import ChatPromptTemplate
+                from langchain_core.output_parsers import StrOutputParser
+                
+                # Create prompt template
+                prompt = ChatPromptTemplate.from_messages([
+                    ("system", "You are a helpful AI assistant. Use the available tools when needed."),
+                    ("human", "{input}")
+                ])
+                
+                # Create chain with tools
+                chain = prompt | self.chat_bedrock.bind_tools(self.tools) | StrOutputParser()
+                
+                # Extract the last human message
+                last_message = None
+                for msg in reversed(messages):
+                    if hasattr(msg, 'content') and isinstance(msg.content, str):
+                        last_message = msg.content
+                        break
+                
+                if last_message:
+                    response = chain.invoke({"input": last_message})
+                    return response
+                else:
+                    # Fallback to direct invocation
+                    response = self.chat_bedrock.invoke(messages)
+                    return response
+            else:
+                # Direct invocation without tools
+                response = self.chat_bedrock.invoke(messages)
+                return response
             
         except Exception as e:
             logger.error(f"Error in ClaudeBedrockLLM: {e}")
@@ -641,6 +703,20 @@ class ClaudeBedrockLLM:
                     self.content = content
             
             return SimpleResponse("I'm having trouble processing your request. Please try again.")
+    
+    def __call__(self, messages):
+        """Make the class callable for LangChain compatibility"""
+        return self.invoke(messages)
+    
+    def bind(self, **kwargs):
+        """Bind parameters for LangChain compatibility"""
+        return self
+    
+    def bind_tools(self, tools):
+        """Bind tools to the LLM"""
+        # Store tools for use in invoke
+        self.tools = tools
+        return self
 
 # ============================================================================
 # LangChain LLM Setup
@@ -793,7 +869,7 @@ def should_attempt_booking(state: HospitalState) -> HospitalState:
     return state
 
 def generate_ai_response(state: HospitalState) -> HospitalState:
-    """Generate AI response using LangChain"""
+    """Generate AI response using LangChain with tools"""
     llm = get_llm()
     if not llm:
         state["ai_response"] = "I'm having trouble processing your request. Please try again."
@@ -801,6 +877,13 @@ def generate_ai_response(state: HospitalState) -> HospitalState:
     
     # Build system prompt
     system_prompt = """You are a warm, friendly AI healthcare assistant helping patients book appointments at our hospital. You have real-time access to our medical database and can make actual bookings.
+
+CRITICAL: You MUST use the database tools to get real information. NEVER make up or hallucinate data.
+
+AVAILABLE TOOLS:
+- query_doctor_availability(specialty, target_date): Get real doctor availability by specialty
+- query_patient_appointments(patient_name, date_of_birth): Check existing patient appointments
+- book_appointment(patient_name, date_of_birth, specialization, doctor_preference, preferred_date, preferred_time): Actually book appointments
 
 CORE BEHAVIOR PRINCIPLES:
 
@@ -817,24 +900,26 @@ CORE BEHAVIOR PRINCIPLES:
 - Remember what they've told you - don't ask twice
 - If they give multiple pieces of info, acknowledge all of them
 
-📄 DATABASE INTEGRATION:
-- Use real data from database tools
-- NEVER make up doctor names or availability
-- Let the system handle actual bookings when user confirms
+📄 DATABASE INTEGRATION - CRITICAL:
+- ALWAYS use query_doctor_availability() when asked about doctor availability
+- ALWAYS use query_patient_appointments() when asked about patient appointments
+- ALWAYS use book_appointment() when confirming a booking
+- NEVER make up doctor names, availability, or appointment times
+- NEVER hallucinate data - only use real database information
 
 CONVERSATIONAL RESPONSES:
 
-For department queries:
-- User: "What departments are available?"
-- You: "We offer excellent care across many specialties! We have Cardiology, Dermatology, General Medicine, Neurology, Orthopedics, Pediatrics, Psychiatry, and Gynecology. Which area were you interested in?"
+For availability queries:
+- User: "What is the availability in cardiology?"
+- You: "Let me check the real availability for cardiology doctors..." [USE query_doctor_availability("cardiology")]
 
-For doctor availability:
-- User: "Who's available in general medicine?"
-- You: "Let me check our General Medicine doctors for you... [use database tools]"
+For specific doctor queries:
+- User: "When is Karen available?"
+- You: "Let me check Dr. Karen Lee's real schedule..." [USE query_doctor_availability("cardiology") and filter for Karen]
 
-For booking confirmation:
-- User: "Yes" (after providing info)
-- You: "Perfect! I'm booking your appointment... [use booking tool]"
+For booking requests:
+- User: "Book me an appointment"
+- You: "I'll help you book that. Let me use the booking system..." [USE book_appointment() with provided details]
 
 SMART BOOKING PROCESS:
 1. Greet warmly and ask for their name
@@ -842,7 +927,7 @@ SMART BOOKING PROCESS:
 3. Ask what type of doctor or if they have someone specific in mind
 4. Find out their preferred timing
 5. Confirm all details conversationally
-6. When they say "yes", let the system book it
+6. When they say "yes", use book_appointment() to actually book it
 
 REMEMBER CONTEXT:
 - If discussing Dr. Lisa (General Medicine), don't book Cardiology
@@ -857,7 +942,7 @@ CONVERSATION EXCELLENCE:
 - Be empathetic: "I understand that can be concerning"
 - Provide clear next steps
 - Remember conversation context
-- Use database for real information
+- ALWAYS use database tools for real information
 
 ❌ DON'T:
 - Give robotic lists of information
@@ -866,28 +951,44 @@ CONVERSATION EXCELLENCE:
 - Generate fake confirmations
 - Switch specialties randomly
 - Use technical error messages
+- EVER make up or hallucinate data
 
-Remember: Be conversational, helpful, and use real database information. Never hallucinate doctor names or availability."""
+Remember: Be conversational, helpful, and ALWAYS use real database information through the available tools. Never hallucinate doctor names, availability, or appointment times."""
 
-    # Build messages
-    messages = [
-        SystemMessage(content=system_prompt),
-        MessagesPlaceholder(variable_name="chat_history"),
-        HumanMessage(content=state["current_message"])
-    ]
+    # Build messages for the LLM
+    messages = [SystemMessage(content=system_prompt)]
+    
+    # Add chat history if available
+    chat_history = state.get("messages", [])
+    for msg in chat_history[-5:]:  # Last 5 messages for context
+        if msg.get("role") == "user":
+            messages.append(HumanMessage(content=msg.get("content", "")))
+        elif msg.get("role") == "assistant":
+            messages.append(AIMessage(content=msg.get("content", "")))
+    
+    # Add current message
+    messages.append(HumanMessage(content=state["current_message"]))
+    
+    # Create tools list
+    tools = [query_doctor_availability, query_patient_appointments, book_appointment]
+    
+    # Create chain with tools
+    from langchain_core.prompts import ChatPromptTemplate
+    from langchain_core.output_parsers import StrOutputParser
+    from langchain_core.tools import tool
     
     # Create prompt template
-    prompt = ChatPromptTemplate.from_messages(messages)
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", system_prompt),
+        ("human", "{input}")
+    ])
     
-    # Create chain
-    chain = prompt | llm | StrOutputParser()
+    # Create chain with tools
+    chain = prompt | llm.bind_tools(tools) | StrOutputParser()
     
-    # Get response
+    # Get response with tools
     try:
-        response = chain.invoke({
-            "chat_history": state.get("messages", []),
-            "current_message": state["current_message"]
-        })
+        response = chain.invoke({"input": state["current_message"]})
         state["ai_response"] = response
     except Exception as e:
         logger.error(f"Error generating AI response: {e}")
@@ -1023,11 +1124,25 @@ class LangChainConversationManager:
         """Get Redis chat history if available"""
         if REDIS_CHAT_HISTORY_AVAILABLE:
             try:
+                # Build Redis URL with authentication if password is provided
+                redis_url = REDIS_CONFIG['url']
+                if REDIS_CONFIG.get('password'):
+                    # Parse the URL and add password
+                    if redis_url.startswith('redis://'):
+                        redis_url = redis_url.replace('redis://', f'redis://:{REDIS_CONFIG["password"]}@')
+                    elif redis_url.startswith('rediss://'):
+                        redis_url = redis_url.replace('rediss://', f'rediss://:{REDIS_CONFIG["password"]}@')
+                
+                # Create Redis URL with database number if specified
+                if REDIS_CONFIG.get('db', 0) != 0:
+                    if '?' in redis_url:
+                        redis_url += f"&db={REDIS_CONFIG.get('db', 0)}"
+                    else:
+                        redis_url += f"?db={REDIS_CONFIG.get('db', 0)}"
+                
                 return RedisChatMessageHistory(
                     session_id=session_id,
-                    url=REDIS_CONFIG['url'],
-                    password=REDIS_CONFIG.get('password'),
-                    db=REDIS_CONFIG.get('db', 0)
+                    url=redis_url
                 )
             except Exception as e:
                 logger.warning(f"Redis chat history not available: {e}")
@@ -1116,7 +1231,7 @@ class LangChainConversationManager:
             return ""
     
     def process_message(self, user_message: str, session_id: str = None) -> Dict[str, Any]:
-        """Process message using LangGraph workflow with Redis chat history"""
+        """Process message using tools-based approach"""
         try:
             if not session_id:
                 session_id = str(uuid.uuid4())
@@ -1130,66 +1245,174 @@ class LangChainConversationManager:
             memory = self._get_memory(session_id)
             memory_vars = memory.load_memory_variables({})
             
-            # Check if LangGraph is available
-            if self.graph is None:
-                logger.warning("LangGraph not available, falling back to basic conversation")
-                # Fallback to basic conversation without LangGraph
-                return self._process_message_basic(user_message, session_id, memory, memory_vars, redis_history)
+            # Use tools-based approach
+            logger.info("Using tools-based workflow")
             
-            logger.info("Using LangGraph workflow")
+            # Create tools list
+            tools = [query_doctor_availability, query_patient_appointments, book_appointment]
             
-            # Initialize state
-            initial_state = HospitalState(
-                messages=memory_vars.get("chat_history", []),
-                patient_name=memory_vars.get("patient_name"),
-                date_of_birth=memory_vars.get("date_of_birth"),
-                specialization=memory_vars.get("specialization"),
-                doctor_preference=memory_vars.get("doctor_preference"),
-                preferred_date=memory_vars.get("preferred_date"),
-                preferred_time=memory_vars.get("preferred_time"),
-                booking_intent=memory_vars.get("booking_intent", False),
-                session_id=session_id,
-                current_message=user_message,
-                ai_response=None,
-                tools_used=[],
-                should_book=False
-            )
+            # Build system prompt
+            system_prompt = """You are a warm, friendly AI healthcare assistant helping patients book appointments at our hospital. You have real-time access to our medical database and can make actual bookings.
+
+CRITICAL: You MUST use the database tools to get real information. NEVER make up or hallucinate data.
+
+AVAILABLE TOOLS:
+- query_doctor_availability(specialty, target_date): Get real doctor availability by specialty
+- query_patient_appointments(patient_name, date_of_birth): Check existing patient appointments
+- book_appointment(patient_name, date_of_birth, specialization, doctor_preference, preferred_date, preferred_time): Actually book appointments
+
+CORE BEHAVIOR PRINCIPLES:
+
+💬 BE CONVERSATIONAL & NATURAL:
+- Sound like a helpful receptionist, not a robot
+- Use warm greetings: "Hello! How can I help you today?"
+- Acknowledge what users say: "I understand", "Of course!", "Great!"
+- Use contractions: "I'd", "you'll", "we're"
+- Add transitions: "Perfect!", "Let me check that for you"
+
+📝 DYNAMIC INFORMATION GATHERING:
+- Don't ask for everything at once
+- If someone says "I want to book an appointment", respond: "I'd be happy to help! May I have your name please?"
+- Remember what they've told you - don't ask twice
+- If they give multiple pieces of info, acknowledge all of them
+
+📄 DATABASE INTEGRATION - CRITICAL:
+- ALWAYS use query_doctor_availability() when asked about doctor availability
+- ALWAYS use query_patient_appointments() when asked about patient appointments
+- ALWAYS use book_appointment() when confirming a booking
+- NEVER make up doctor names, availability, or appointment times
+- NEVER hallucinate data - only use real database information
+
+CONVERSATIONAL RESPONSES:
+
+For availability queries:
+- User: "What is the availability in cardiology?"
+- You: "Let me check the real availability for cardiology doctors..." [USE query_doctor_availability("cardiology")]
+
+For specific doctor queries:
+- User: "When is Karen available?"
+- You: "Let me check Dr. Karen Lee's real schedule..." [USE query_doctor_availability("cardiology") and filter for Karen]
+
+For booking requests:
+- User: "Book me an appointment"
+- You: "I'll help you book that. Let me use the booking system..." [USE book_appointment() with provided details]
+
+SMART BOOKING PROCESS:
+1. Greet warmly and ask for their name
+2. Thank them and ask for date of birth 
+3. Ask what type of doctor or if they have someone specific in mind
+4. Find out their preferred timing
+5. Confirm all details conversationally
+6. When they say "yes", use book_appointment() to actually book it
+
+REMEMBER CONTEXT:
+- If discussing Dr. Lisa (General Medicine), don't book Cardiology
+- If they mentioned a specialty, stick with it
+- Don't override their preferences with wrong specialties
+
+CONVERSATION EXCELLENCE:
+
+✅ DO:
+- Start responses acknowledging what they said
+- Use their name once you know it
+- Be empathetic: "I understand that can be concerning"
+- Provide clear next steps
+- Remember conversation context
+- ALWAYS use database tools for real information
+
+❌ DON'T:
+- Give robotic lists of information
+- Say "No doctors found" - instead offer alternatives
+- Ask for information they already provided
+- Generate fake confirmations
+- Switch specialties randomly
+- Use technical error messages
+- EVER make up or hallucinate data
+
+Remember: Be conversational, helpful, and ALWAYS use real database information through the available tools. Never hallucinate doctor names, availability, or appointment times."""
+
+            # Build messages
+            messages = [SystemMessage(content=system_prompt)]
             
-            # Run through LangGraph workflow
-            final_state = self.graph.invoke(initial_state)
+            # Add chat history if available
+            chat_history = memory_vars.get("chat_history", [])
+            for msg in chat_history[-5:]:  # Last 5 messages for context
+                if msg.get("role") == "user":
+                    messages.append(HumanMessage(content=msg.get("content", "")))
+                elif msg.get("role") == "assistant":
+                    messages.append(AIMessage(content=msg.get("content", "")))
             
-            # Save to memory
-            memory.save_context(
-                {"messages": final_state["messages"]},
-                {
-                    "patient_name": final_state.get("patient_name"),
-                    "date_of_birth": final_state.get("date_of_birth"),
-                    "specialization": final_state.get("specialization"),
-                    "doctor_preference": final_state.get("doctor_preference"),
-                    "preferred_date": final_state.get("preferred_date"),
-                    "preferred_time": final_state.get("preferred_time"),
-                    "booking_intent": final_state.get("booking_intent", False)
+            # Add current message
+            messages.append(HumanMessage(content=user_message))
+            
+            # Create chain with tools
+            from langchain_core.prompts import ChatPromptTemplate
+            from langchain_core.output_parsers import StrOutputParser
+            
+            # Create prompt template
+            prompt = ChatPromptTemplate.from_messages([
+                ("system", system_prompt),
+                ("human", "{input}")
+            ])
+            
+            # Get response with tools
+            try:
+                # Check if the message is asking about availability
+                if any(word in user_message.lower() for word in ['availability', 'available', 'schedule', 'cardiology', 'neurology', 'orthopedics', 'pediatrics', 'dermatology', 'psychiatry', 'gynecology']):
+                    # Extract specialty from message
+                    specialties = ['cardiology', 'neurology', 'orthopedics', 'pediatrics', 'dermatology', 'psychiatry', 'gynecology', 'general medicine']
+                    specialty = None
+                    for spec in specialties:
+                        if spec in user_message.lower():
+                            specialty = spec
+                            break
+                    
+                    if specialty:
+                        # Call the tool directly
+                        tool_result = query_doctor_availability(specialty)
+                        response = f"Let me check the real availability for {specialty} doctors...\n\n{tool_result}"
+                    else:
+                        response = self.llm.invoke(messages)
+                        if hasattr(response, 'content'):
+                            response = response.content
+                        else:
+                            response = str(response)
+                else:
+                    response = self.llm.invoke(messages)
+                    if hasattr(response, 'content'):
+                        response = response.content
+                    else:
+                        response = str(response)
+                
+                # Save to memory
+                memory.save_context(
+                    {"user_message": user_message},
+                    {"ai_response": response}
+                )
+                
+                # Save to Redis if available (non-critical)
+                if redis_history:
+                    try:
+                        redis_history.add_user_message(user_message)
+                        redis_history.add_ai_message(response)
+                    except Exception as e:
+                        # Redis is not critical, just log and continue
+                        logger.debug(f"Redis save failed (non-critical): {e}")
+                
+                return {
+                    'success': True,
+                    'response': response,
+                    'session_id': session_id,
+                    'patient_name': memory_vars.get("patient_name"),
+                    'booking_intent': "book" in user_message.lower() or "appointment" in user_message.lower(),
+                    'tools_used': ["database_tools"],
+                    'appointment_booked': 'book_appointment' in response.lower()
                 }
-            )
-            
-            # Save to Redis if available
-            if redis_history:
-                try:
-                    redis_history.add_user_message(user_message)
-                    redis_history.add_ai_message(final_state.get("ai_response", ""))
-                except Exception as e:
-                    logger.warning(f"Failed to save to Redis: {e}")
-            
-            return {
-                'success': True,
-                'response': final_state.get("ai_response", "I apologize, but I couldn't process your request properly."),
-                'session_id': session_id,
-                'patient_name': final_state.get("patient_name"),
-                'booking_intent': final_state.get("booking_intent", False),
-                'tools_used': final_state.get("tools_used", []),
-                'appointment_booked': 'book_appointment' in final_state.get("tools_used", [])
-            }
-            
+                
+            except Exception as e:
+                logger.error(f"Error in tools-based workflow: {e}")
+                return self._process_message_basic(user_message, session_id, memory, memory_vars, redis_history)
+                
         except Exception as e:
             logger.error(f"Error processing message: {e}")
             return {
@@ -1765,10 +1988,14 @@ def get_doctors():
 @app.route('/api/health', methods=['GET'])
 def health_check():
     """Health check endpoint with system status"""
+    # Check if LLM is available
+    llm_available = conversation_manager.llm is not None and BEDROCK_AVAILABLE
+    
     status = {
         'status': 'healthy',
         'timestamp': datetime.now().isoformat(),
         'database': 'connected' if get_db_connection() else 'disconnected',
+        'ai_service': 'available' if llm_available else 'unavailable',
         'langchain': 'enabled' if conversation_manager.llm else 'disabled',
         'bedrock': 'available' if BEDROCK_AVAILABLE else 'unavailable',
         'rag': 'enabled' if RAG_AVAILABLE else 'disabled',
