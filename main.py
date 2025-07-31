@@ -23,13 +23,16 @@ try:
     from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
     from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
     from langchain_core.output_parsers import StrOutputParser
-    from langchain_core.pydantic_v1 import BaseModel, Field
+    from pydantic import BaseModel, Field
     from langchain_core.tools import tool
     from langchain_core.memory import BaseMemory
     from langchain_core.language_models import BaseChatModel
     from langchain_core.callbacks.base import BaseCallbackHandler
     from langchain_core.prompts import PromptTemplate
     from langchain_core.output_parsers import JsonOutputParser
+    
+    # Import official LangChain AWS package
+    from langchain_aws import ChatBedrock
     LANGCHAIN_AVAILABLE = True
     print("✅ LangChain Core: Available")
 except ImportError as e:
@@ -97,11 +100,9 @@ DB_CONFIG = {
 
 # Redis configuration
 REDIS_CONFIG = {
-    'host': os.getenv('REDIS_HOST', 'localhost'),
-    'port': int(os.getenv('REDIS_PORT', 6379)),
-    'db': int(os.getenv('REDIS_DB', 0)),
-    'password': os.getenv('REDIS_PASSWORD', None),
-    'decode_responses': True
+    'url': f"redis://{os.getenv('REDIS_HOST', 'localhost')}:{os.getenv('REDIS_PORT', 6379)}",
+    'password': os.getenv('REDIS_PASSWORD'),
+    'db': int(os.getenv('REDIS_DB', 0))
 }
 
 # Try importing AWS Bedrock
@@ -169,7 +170,7 @@ def get_db_connection():
         return None
 
 def serialize_datetime_objects(obj):
-    """Convert datetime, date, and time objects to strings for JSON serialization"""
+    """Convert datetime, date, time, and Decimal objects to strings for JSON serialization"""
     if isinstance(obj, dict):
         return {key: serialize_datetime_objects(value) for key, value in obj.items()}
     elif isinstance(obj, list):
@@ -178,6 +179,8 @@ def serialize_datetime_objects(obj):
         return obj.isoformat()
     elif isinstance(obj, time):
         return obj.strftime('%H:%M:%S')
+    elif hasattr(obj, '__class__') and obj.__class__.__name__ == 'Decimal':
+        return float(obj)
     else:
         return obj
 
@@ -610,58 +613,33 @@ class HospitalMemory:
 # ============================================================================
 
 class ClaudeBedrockLLM:
-    """Custom LLM that uses bedrock.py Claude model"""
+    """Custom LLM that uses official LangChain AWS ChatBedrock"""
     
     def __init__(self):
-        # Import the bedrock functions
-        from bedrock import get_ai_response
-        self._get_ai_response = get_ai_response
+        # Use the official ChatBedrock from langchain-aws
+        self.chat_bedrock = ChatBedrock(
+            model="anthropic.claude-3-sonnet-20240229-v1:0",
+            beta_use_converse_api=True
+        )
     
     @property
     def _llm_type(self) -> str:
         return "claude_bedrock"
     
     def invoke(self, messages):
-        """Generate response using bedrock.py Claude model"""
+        """Generate response using official ChatBedrock"""
         try:
-            # Convert LangChain messages to format expected by bedrock.py
-            conversation_history = []
-            system_prompt = ""
+            # Use the official ChatBedrock
+            response = self.chat_bedrock.invoke(messages)
+            return response
             
-            for message in messages:
-                if isinstance(message, SystemMessage):
-                    system_prompt = message.content
-                elif isinstance(message, HumanMessage):
-                    conversation_history.append({
-                        "user": message.content,
-                        "ai": ""
-                    })
-                elif isinstance(message, AIMessage):
-                    if conversation_history:
-                        conversation_history[-1]["ai"] = message.content
-                    else:
-                        conversation_history.append({
-                            "user": "",
-                            "ai": message.content
-                        })
-            
-            # Get the last user message
-            user_message = ""
-            if messages and isinstance(messages[-1], HumanMessage):
-                user_message = messages[-1].content
-            
-            # Use bedrock.py to get response
-            response = self._get_ai_response(system_prompt, user_message, conversation_history)
-            
+        except Exception as e:
+            logger.error(f"Error in ClaudeBedrockLLM: {e}")
             # Return a simple object with content attribute
             class SimpleResponse:
                 def __init__(self, content):
                     self.content = content
             
-            return SimpleResponse(response)
-            
-        except Exception as e:
-            logger.error(f"Error in ClaudeBedrockLLM: {e}")
             return SimpleResponse("I'm having trouble processing your request. Please try again.")
 
 # ============================================================================
@@ -669,10 +647,12 @@ class ClaudeBedrockLLM:
 # ============================================================================
 
 def get_llm():
-    """Get LangChain LLM instance using custom Claude model"""
+    """Get LangChain LLM instance using official ChatBedrock"""
     if BEDROCK_AVAILABLE:
         try:
-            return ClaudeBedrockLLM()
+            llm = ClaudeBedrockLLM()
+            logger.info("✅ ClaudeBedrockLLM initialized successfully")
+            return llm
         except Exception as e:
             logger.error(f"Error initializing ClaudeBedrockLLM: {e}")
             return None
@@ -1045,7 +1025,9 @@ class LangChainConversationManager:
             try:
                 return RedisChatMessageHistory(
                     session_id=session_id,
-                    **REDIS_CONFIG
+                    url=REDIS_CONFIG['url'],
+                    password=REDIS_CONFIG.get('password'),
+                    db=REDIS_CONFIG.get('db', 0)
                 )
             except Exception as e:
                 logger.warning(f"Redis chat history not available: {e}")
@@ -1139,6 +1121,8 @@ class LangChainConversationManager:
             if not session_id:
                 session_id = str(uuid.uuid4())
             
+            logger.info(f"Processing message: {user_message[:50]}...")
+            
             # Get Redis chat history if available
             redis_history = self._get_redis_chat_history(session_id)
             
@@ -1148,8 +1132,11 @@ class LangChainConversationManager:
             
             # Check if LangGraph is available
             if self.graph is None:
+                logger.warning("LangGraph not available, falling back to basic conversation")
                 # Fallback to basic conversation without LangGraph
                 return self._process_message_basic(user_message, session_id, memory, memory_vars, redis_history)
+            
+            logger.info("Using LangGraph workflow")
             
             # Initialize state
             initial_state = HospitalState(
