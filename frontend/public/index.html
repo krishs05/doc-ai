@@ -645,6 +645,116 @@
             box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
         }
 
+        /* Patient Lookup Section */
+        .patient-lookup {
+            background: #f8fafc;
+            border-radius: var(--radius);
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+            border: 1px solid var(--border);
+        }
+
+        .patient-lookup h3 {
+            margin-bottom: 1rem;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .lookup-form {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .lookup-form input {
+            padding: 0.75rem;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            font-size: 0.875rem;
+        }
+
+        .lookup-button {
+            grid-column: 1 / -1;
+            padding: 0.75rem;
+            background: var(--primary);
+            color: white;
+            border: none;
+            border-radius: var(--radius);
+            cursor: pointer;
+            font-weight: 600;
+            transition: var(--transition);
+        }
+
+        .lookup-button:hover {
+            background: var(--primary-dark);
+        }
+
+        /* Appointment Confirmation Styles */
+        .appointment-confirmation {
+            background: linear-gradient(135deg, var(--accent) 0%, #059669 100%);
+            color: white;
+            padding: 1.5rem;
+            border-radius: var(--radius);
+            margin: 1rem 0;
+            box-shadow: var(--shadow-lg);
+        }
+
+        .appointment-confirmation h4 {
+            margin-bottom: 1rem;
+            font-size: 1.25rem;
+        }
+
+        .appointment-details {
+            font-size: 0.9rem;
+            line-height: 1.6;
+        }
+
+        /* Enhanced message formatting */
+        .message-content {
+            white-space: pre-wrap;
+            line-height: 1.6;
+        }
+
+        .message-content strong {
+            font-weight: 600;
+            color: inherit;
+        }
+
+        /* System Status Indicator */
+        .system-status {
+            position: fixed;
+            top: 100px;
+            left: 2rem;
+            background: white;
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+            padding: 1rem;
+            font-size: 0.75rem;
+            z-index: 100;
+            opacity: 0.8;
+            transition: var(--transition);
+        }
+
+        .system-status:hover {
+            opacity: 1;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 0.5rem;
+            background: var(--danger);
+        }
+
+        .status-dot.connected {
+            background: var(--accent);
+        }
+
         /* Responsive */
         @media (max-width: 768px) {
             .nav-menu {
@@ -684,6 +794,14 @@
                 flex-direction: column;
                 align-items: stretch;
             }
+
+            .lookup-form {
+                grid-template-columns: 1fr;
+            }
+
+            .system-status {
+                display: none;
+            }
         }
 
         /* Loading Animation */
@@ -715,6 +833,7 @@
             gap: 1rem;
             animation: slideInRight 0.3s ease;
             z-index: 3000;
+            min-width: 300px;
         }
 
         @keyframes slideInRight {
@@ -735,9 +854,19 @@
         .toast.error {
             border-left: 4px solid var(--danger);
         }
+
+        .toast.warning {
+            border-left: 4px solid var(--warning);
+        }
     </style>
 </head>
 <body>
+    <!-- System Status Indicator -->
+    <div id="systemStatus" class="system-status">
+        <div><span class="status-dot" id="dbStatus"></span>Database: <span id="dbStatusText">Checking...</span></div>
+        <div><span class="status-dot" id="aiStatus"></span>AI Service: <span id="aiStatusText">Checking...</span></div>
+    </div>
+
     <!-- Navigation -->
     <nav class="navbar">
         <div class="nav-container">
@@ -751,7 +880,7 @@
                 <a href="#appointments" class="nav-link">Appointments</a>
                 <a href="#contact" class="nav-link">Contact</a>
             </div>
-            <div class="nav-actions">
+            <div class="nav-actions" id="navActions">
                 <button class="btn btn-secondary" onclick="openAuthModal('login')">Sign In</button>
                 <button class="btn btn-primary" onclick="openChat()">Chat Now</button>
             </div>
@@ -781,7 +910,7 @@
                         </div>
                         <div>
                             <h4>AI Assistant</h4>
-                            <p style="color: var(--accent); margin: 0;">Online</p>
+                            <p style="color: var(--accent); margin: 0;" id="aiStatusIndicator">Online</p>
                         </div>
                     </div>
                     <p>Hi! I'm here to help you book appointments and answer health questions.</p>
@@ -830,9 +959,22 @@
                 <h2>Your Appointments</h2>
                 <p>View and manage your upcoming appointments</p>
             </div>
+            
+            <!-- Patient Lookup -->
+            <div class="patient-lookup">
+                <h3><i class="fas fa-search"></i> Find My Appointments</h3>
+                <div class="lookup-form">
+                    <input type="text" id="patientName" placeholder="Full Name (e.g., John Smith)" />
+                    <input type="text" id="patientDOB" placeholder="Date of Birth (MM/DD/YYYY)" />
+                    <button class="lookup-button" onclick="lookupPatientAppointments()">
+                        <i class="fas fa-search"></i> Search My Appointments
+                    </button>
+                </div>
+            </div>
+
             <div class="appointments-container">
                 <div class="appointments-header">
-                    <h3>Upcoming Appointments</h3>
+                    <h3>Appointments</h3>
                     <div style="display: flex; gap: 0.5rem;">
                         <button class="btn btn-secondary btn-small" onclick="refreshAppointments()">
                             <i class="fas fa-refresh"></i> Refresh
@@ -875,7 +1017,7 @@
                     placeholder="Type your message..."
                     onkeypress="handleChatKeypress(event)"
                 >
-                <button class="btn btn-primary" onclick="sendMessage()">
+                <button class="btn btn-primary" onclick="sendMessage()" id="sendButton">
                     <i class="fas fa-paper-plane"></i>
                 </button>
             </div>
@@ -922,6 +1064,10 @@
                         <label class="form-label">Phone</label>
                         <input type="tel" class="form-input" name="phone">
                     </div>
+                    <div class="form-group">
+                        <label class="form-label">Date of Birth</label>
+                        <input type="date" class="form-input" name="date_of_birth">
+                    </div>
                 </div>
                 <button type="submit" class="btn btn-primary" style="width: 100%;">
                     <span id="authButtonText">Sign In</span>
@@ -942,6 +1088,11 @@
         let sessionId = generateSessionId();
         let authMode = 'login';
         let currentAppointments = [];
+        let systemHealthy = false;
+        let currentUser = null;
+        
+        // API base URL
+        const API_BASE = 'http://localhost:8000';
 
         // Generate unique session ID
         function generateSessionId() {
@@ -976,7 +1127,10 @@
                 if (timeString.includes('T')) {
                     date = new Date(timeString);
                 } else {
-                    date = new Date(`1970-01-01T${timeString}`);
+                    // Handle time-only strings like "14:30:00"
+                    const [hours, minutes] = timeString.split(':');
+                    date = new Date();
+                    date.setHours(parseInt(hours), parseInt(minutes), 0, 0);
                 }
                 
                 if (isNaN(date.getTime())) return timeString;
@@ -1011,6 +1165,50 @@
                 'no_show': 'No Show'
             };
             return statusMap[status] || status;
+        }
+
+        // System health check
+        async function checkSystemHealth() {
+            try {
+                const response = await fetch(`${API_BASE}/api/health`);
+                const data = await response.json();
+                
+                systemHealthy = data.status === 'healthy';
+                updateSystemStatus(data);
+                
+                // Update AI status indicator
+                const aiIndicator = document.getElementById('aiStatusIndicator');
+                if (aiIndicator) {
+                    aiIndicator.textContent = systemHealthy ? 'Online' : 'Offline';
+                    aiIndicator.style.color = systemHealthy ? 'var(--accent)' : 'var(--danger)';
+                }
+                
+            } catch (error) {
+                console.error('System health check failed:', error);
+                systemHealthy = false;
+                updateSystemStatus({
+                    status: 'unhealthy',
+                    database: 'disconnected',
+                    ai_service: 'disconnected'
+                });
+            }
+        }
+
+        function updateSystemStatus(status) {
+            const dbStatus = document.getElementById('dbStatus');
+            const dbStatusText = document.getElementById('dbStatusText');
+            const aiStatus = document.getElementById('aiStatus');
+            const aiStatusText = document.getElementById('aiStatusText');
+            
+            if (dbStatus && dbStatusText) {
+                dbStatus.className = `status-dot ${status.database === 'connected' ? 'connected' : ''}`;
+                dbStatusText.textContent = status.database || 'Unknown';
+            }
+            
+            if (aiStatus && aiStatusText) {
+                aiStatus.className = `status-dot ${status.ai_service === 'connected' ? 'connected' : ''}`;
+                aiStatusText.textContent = status.ai_service || 'Unknown';
+            }
         }
 
         // Navigation
@@ -1062,30 +1260,38 @@
         function initializeChat() {
             const messagesContainer = document.getElementById('chatMessages');
             if (messagesContainer.children.length === 0) {
-                addMessage('ai', "Hello! I'm your AI healthcare assistant. I can help you book appointments, find doctors, and answer health questions. How can I assist you today?");
+                addMessage('ai', "👋 Hello! I'm your AI healthcare assistant. I can help you:\n\n• Book appointments with our doctors\n• Check doctor availability and schedules\n• Find specialists for your medical needs\n• Look up your existing appointments\n• Answer general health questions\n\nHow can I assist you today?");
             }
         }
 
         function handleChatKeypress(event) {
-            if (event.key === 'Enter') {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
                 sendMessage();
             }
         }
 
         async function sendMessage() {
             const input = document.getElementById('chatInput');
+            const sendButton = document.getElementById('sendButton');
             const message = input.value.trim();
             
             if (!message) return;
             
+            // Check system health first
+            if (!systemHealthy) {
+                showToast('Warning', 'System may be offline. Attempting to send message...', 'warning');
+            }
+            
             addMessage('user', message);
             input.value = '';
+            sendButton.disabled = true;
             
             // Show typing indicator
             showTypingIndicator();
             
             try {
-                const response = await fetch('http://localhost:8000/api/chat', {
+                const response = await fetch(`${API_BASE}/api/chat`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -1096,9 +1302,14 @@
                     }),
                 });
                 
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
                 const data = await response.json();
                 
                 hideTypingIndicator();
+                sendButton.disabled = false;
                 
                 if (data.success) {
                     addMessage('ai', data.response);
@@ -1108,17 +1319,34 @@
                         console.log('Appointment was booked, refreshing appointments list...');
                         showToast('Success', 'Appointment booked successfully!', 'success');
                         
-                        // Refresh appointments list
+                        // Refresh appointments list after a short delay
                         setTimeout(() => {
                             loadAppointments();
-                        }, 1000);
+                        }, 1500);
+                    }
+                    
+                    // Check if user needs more info for booking
+                    if (data.needs_more_info) {
+                        // Highlight the chat input to encourage user to provide more info
+                        input.style.borderColor = 'var(--warning)';
+                        setTimeout(() => {
+                            input.style.borderColor = '';
+                        }, 3000);
                     }
                 } else {
-                    addMessage('ai', 'Sorry, I encountered an error. Please try again.');
+                    addMessage('ai', data.message || 'Sorry, I encountered an error. Please try again.');
                 }
             } catch (error) {
+                console.error('Chat error:', error);
                 hideTypingIndicator();
-                addMessage('ai', 'Sorry, I couldn\'t connect to the server. Please make sure the backend is running.');
+                sendButton.disabled = false;
+                
+                if (error.message.includes('Failed to fetch')) {
+                    addMessage('ai', '🔌 I\'m having trouble connecting to the server. Please make sure the backend is running on port 8000 and try again.');
+                    showToast('Error', 'Connection failed. Check if backend is running.', 'error');
+                } else {
+                    addMessage('ai', 'Sorry, I encountered a technical error. Please try again.');
+                }
             }
         }
 
@@ -1126,25 +1354,66 @@
             const messagesContainer = document.getElementById('chatMessages');
             const messageDiv = document.createElement('div');
             messageDiv.className = `message ${sender}`;
-            messageDiv.innerHTML = formatMessage(content);
+            
+            // Create message content with proper formatting
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'message-content';
+            contentDiv.innerHTML = formatMessage(content);
+            
+            messageDiv.appendChild(contentDiv);
             messagesContainer.appendChild(messageDiv);
             messagesContainer.scrollTop = messagesContainer.scrollHeight;
         }
 
         function formatMessage(content) {
-            // Convert markdown-style formatting
-            return content
+            // Handle appointment confirmation formatting
+            if (content.includes('Appointment #') && content.includes('booked successfully')) {
+                const lines = content.split('\n');
+                let formatted = '';
+                let inDetails = false;
+                
+                for (const line of lines) {
+                    if (line.includes('Appointment #') && line.includes('booked successfully')) {
+                        formatted += `<div class="appointment-confirmation"><h4>${escapeHtml(line)}</h4>`;
+                        inDetails = true;
+                    } else if (inDetails && line.trim() === '') {
+                        formatted += '</div>';
+                        inDetails = false;
+                    } else if (inDetails) {
+                        formatted += `<div class="appointment-details">${escapeHtml(line)}</div>`;
+                    } else {
+                        formatted += escapeHtml(line) + '\n';
+                    }
+                }
+                
+                if (inDetails) {
+                    formatted += '</div>';
+                }
+                
+                return formatted;
+            }
+            
+            // Regular message formatting
+            return escapeHtml(content)
                 .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+                .replace(/\n\n/g, '<br><br>')
                 .replace(/\n/g, '<br>')
-                .replace(/• /g, '&bull; ');
+                .replace(/• /g, '• ');
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
         }
 
         function showTypingIndicator() {
             const indicator = document.createElement('div');
             indicator.id = 'typingIndicator';
             indicator.className = 'message ai';
-            indicator.innerHTML = '<div class="loading"></div> AI is typing...';
+            indicator.innerHTML = '<div class="loading"></div> <span style="margin-left: 0.5rem;">AI is thinking...</span>';
             document.getElementById('chatMessages').appendChild(indicator);
+            document.getElementById('chatMessages').scrollTop = document.getElementById('chatMessages').scrollHeight;
         }
 
         function hideTypingIndicator() {
@@ -1152,7 +1421,7 @@
             if (indicator) indicator.remove();
         }
 
-        // Load appointments with enhanced functionality
+        // Enhanced appointment loading
         async function loadAppointments() {
             const container = document.getElementById('appointmentsList');
             if (!container) return;
@@ -1166,42 +1435,27 @@
                     </div>
                 `;
 
-                // Try to get user info from localStorage
-                let user = null;
-                try {
-                    user = JSON.parse(localStorage.getItem('user'));
-                } catch (e) { user = null; }
-
+                console.log('Loading appointments from API...');
+                const response = await fetch(`${API_BASE}/api/appointments`);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                console.log('API Response:', data);
+                
                 let appointments = [];
-                if (user && user.name && user.date_of_birth) {
-                    // Use patient-specific endpoint
-                    console.log('Loading appointments for user:', user.name, user.date_of_birth);
-                    const response = await fetch('http://localhost:8000/api/appointments/patient', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            patient_name: user.name,
-                            date_of_birth: user.date_of_birth
-                        })
-                    });
-                    const data = await response.json();
-                    if (data.success) {
-                        appointments = data.appointments;
-                    } else {
-                        throw new Error(data.message || 'Failed to load patient appointments');
-                    }
+                if (data.success && data.appointments) {
+                    appointments = data.appointments;
+                } else if (Array.isArray(data)) {
+                    appointments = data;
                 } else {
-                    // Fallback: load all appointments
-                    console.log('Loading appointments from: http://localhost:8000/api/appointments');
-                    const response = await fetch('http://localhost:8000/api/appointments');
-                    if (!response.ok) {
-                        throw new Error(`HTTP error! status: ${response.status}`);
-                    }
-                    appointments = await response.json();
+                    throw new Error('Invalid response format');
                 }
 
                 console.log('Loaded appointments:', appointments);
-                currentAppointments = appointments; // Store for later use
+                currentAppointments = appointments;
                 displayAppointments(appointments);
 
             } catch (error) {
@@ -1210,7 +1464,8 @@
                     <div class="error-appointments">
                         <i class="fas fa-exclamation-triangle"></i>
                         <h3>Unable to load appointments</h3>
-                        <p>There was an error loading your appointments. Please try again.</p>
+                        <p>Error: ${error.message}</p>
+                        <p style="font-size: 0.875rem; opacity: 0.7;">Make sure the backend server is running on port 8000</p>
                         <button class="btn btn-primary" onclick="loadAppointments()">
                             <i class="fas fa-retry"></i>
                             Try Again
@@ -1220,11 +1475,86 @@
             }
         }
 
+        // Patient appointment lookup
+        async function lookupPatientAppointments() {
+            const patientName = document.getElementById('patientName').value.trim();
+            const patientDOB = document.getElementById('patientDOB').value.trim();
+            
+            if (!patientName || !patientDOB) {
+                showToast('Warning', 'Please enter both name and date of birth', 'warning');
+                return;
+            }
+
+            const container = document.getElementById('appointmentsList');
+            container.innerHTML = `
+                <div class="loading-appointments">
+                    <div class="spinner"></div>
+                    <p>Searching for appointments for ${patientName}...</p>
+                </div>
+            `;
+
+            try {
+                const response = await fetch(`${API_BASE}/api/patient/appointments`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        patient_name: patientName,
+                        date_of_birth: patientDOB
+                    })
+                });
+
+                const data = await response.json();
+                
+                if (data.success) {
+                    if (data.appointments && data.appointments.length > 0) {
+                        currentAppointments = data.appointments;
+                        displayAppointments(data.appointments);
+                        showToast('Success', `Found ${data.appointments.length} appointments for ${patientName}`, 'success');
+                    } else {
+                        container.innerHTML = `
+                            <div class="no-appointments">
+                                <i class="fas fa-search"></i>
+                                <h3>No appointments found</h3>
+                                <p>No upcoming appointments found for ${patientName}.</p>
+                                <button class="btn btn-primary" onclick="openChat()">
+                                    <i class="fas fa-plus"></i>
+                                    Book New Appointment
+                                </button>
+                            </div>
+                        `;
+                        showToast('Info', `No appointments found for ${patientName}`, 'warning');
+                    }
+                } else {
+                    throw new Error(data.message || 'Patient lookup failed');
+                }
+            } catch (error) {
+                console.error('Patient lookup failed:', error);
+                container.innerHTML = `
+                    <div class="error-appointments">
+                        <i class="fas fa-user-times"></i>
+                        <h3>Patient lookup failed</h3>
+                        <p>Error: ${error.message}</p>
+                        <button class="btn btn-primary" onclick="loadAppointments()">
+                            <i class="fas fa-list"></i>
+                            Show All Appointments
+                        </button>
+                    </div>
+                `;
+                showToast('Error', 'Unable to find patient information', 'error');
+            }
+
+            // Clear form
+            document.getElementById('patientName').value = '';
+            document.getElementById('patientDOB').value = '';
+        }
+
         function displayAppointments(appointments) {
             const container = document.getElementById('appointmentsList');
             if (!container) return;
 
-            if (appointments.length === 0) {
+            if (!appointments || appointments.length === 0) {
                 container.innerHTML = `
                     <div class="no-appointments">
                         <i class="fas fa-calendar-plus"></i>
@@ -1239,22 +1569,43 @@
                 return;
             }
 
+            // Sort appointments by date and time
+            appointments.sort((a, b) => {
+                const dateA = new Date(a.appointment_date || a.date);
+                const dateB = new Date(b.appointment_date || b.date);
+                return dateA - dateB;
+            });
+
             container.innerHTML = appointments.map(apt => {
-                const appointmentDate = apt.date || apt.appointment_date;
-                const appointmentTime = apt.time || apt.appointment_time;
+                const appointmentDate = apt.appointment_date || apt.date;
+                const appointmentTime = apt.appointment_time || apt.time;
+                
+                // Parse date for display
+                let displayDate = 'TBD';
+                let dayOfMonth = '?';
+                try {
+                    const date = new Date(appointmentDate);
+                    if (!isNaN(date.getTime())) {
+                        displayDate = date.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+                        dayOfMonth = date.getDate().toString();
+                    }
+                } catch (e) {
+                    console.error('Date parsing error:', e);
+                }
                 
                 return `
                     <div class="appointment-item" data-appointment-id="${apt.id}">
                         <div class="appointment-date">
-                            <div class="month">${formatDate(appointmentDate).split(' ')[1]} ${formatDate(appointmentDate).split(' ')[2]}</div>
-                            <div class="day">${formatDate(appointmentDate).split(' ')[3] || formatDate(appointmentDate).split(' ')[2]}</div>
+                            <div class="month">${displayDate}</div>
+                            <div class="day">${dayOfMonth}</div>
                         </div>
                         <div class="appointment-info">
-                            <h4>Dr. ${apt.doctor_name}</h4>
-                            <p><i class="fas fa-stethoscope"></i> ${apt.specialization || apt.department}</p>
+                            <h4>${apt.doctor_name || 'Dr. Unknown'}</h4>
+                            <p><i class="fas fa-stethoscope"></i> ${apt.specialization || apt.department || 'General Medicine'}</p>
                             <p><i class="fas fa-clock"></i> ${formatTime(appointmentTime)}</p>
-                            <p><i class="fas fa-user"></i> ${apt.patient_name}</p>
-                            ${apt.reason ? `<p><i class="fas fa-notes-medical"></i> ${apt.reason}</p>` : ''}
+                            <p><i class="fas fa-user"></i> ${apt.patient_name || 'Patient'}</p>
+                            ${apt.reason_for_visit ? `<p><i class="fas fa-notes-medical"></i> ${apt.reason_for_visit}</p>` : ''}
+                            ${apt.consultation_fee ? `<p><i class="fas fa-dollar-sign"></i> $${apt.consultation_fee}</p>` : ''}
                         </div>
                         <div class="appointment-actions">
                             <span class="appointment-status ${getStatusClass(apt.status)}">${formatStatus(apt.status)}</span>
@@ -1278,7 +1629,10 @@
         // Appointment management functions
         function viewAppointment(appointmentId) {
             const appointment = currentAppointments.find(apt => apt.id === appointmentId);
-            if (!appointment) return;
+            if (!appointment) {
+                showToast('Error', 'Appointment not found', 'error');
+                return;
+            }
 
             const modal = document.getElementById('appointmentModal');
             const modalTitle = document.getElementById('modalTitle');
@@ -1289,38 +1643,50 @@
                 <div style="display: grid; gap: 1rem;">
                     <div>
                         <strong>Patient:</strong> 
-                        <span>${appointment.patient_name}</span>
+                        <span>${appointment.patient_name || 'N/A'}</span>
                     </div>
                     <div>
                         <strong>Doctor:</strong> 
-                        <span>Dr. ${appointment.doctor_name}</span>
+                        <span>${appointment.doctor_name || 'N/A'}</span>
                     </div>
                     <div>
                         <strong>Specialty:</strong> 
-                        <span>${appointment.specialization || appointment.department}</span>
+                        <span>${appointment.specialization || appointment.department || 'N/A'}</span>
                     </div>
                     <div>
                         <strong>Date:</strong> 
-                        <span>${formatDate(appointment.date || appointment.appointment_date)}</span>
+                        <span>${formatDate(appointment.appointment_date || appointment.date)}</span>
                     </div>
                     <div>
                         <strong>Time:</strong> 
-                        <span>${formatTime(appointment.time || appointment.appointment_time)}</span>
+                        <span>${formatTime(appointment.appointment_time || appointment.time)}</span>
                     </div>
                     <div>
                         <strong>Status:</strong> 
                         <span class="appointment-status ${getStatusClass(appointment.status)}">${formatStatus(appointment.status)}</span>
                     </div>
-                    ${appointment.reason ? `
+                    ${appointment.reason_for_visit ? `
                         <div>
                             <strong>Reason:</strong> 
-                            <span>${appointment.reason}</span>
+                            <span>${appointment.reason_for_visit}</span>
+                        </div>
+                    ` : ''}
+                    ${appointment.consultation_fee ? `
+                        <div>
+                            <strong>Consultation Fee:</strong> 
+                            <span>$${appointment.consultation_fee}</span>
                         </div>
                     ` : ''}
                     ${appointment.patient_phone ? `
                         <div>
                             <strong>Phone:</strong> 
                             <span>${appointment.patient_phone}</span>
+                        </div>
+                    ` : ''}
+                    ${appointment.notes ? `
+                        <div>
+                            <strong>Notes:</strong> 
+                            <span>${appointment.notes}</span>
                         </div>
                     ` : ''}
                     ${appointment.status !== 'cancelled' && appointment.status !== 'completed' ? `
@@ -1345,11 +1711,12 @@
             }
 
             try {
-                const response = await fetch(`http://localhost:8000/api/appointments/${appointmentId}`, {
+                const response = await fetch(`${API_BASE}/api/appointments`, {
                     method: 'DELETE',
                     headers: {
                         'Content-Type': 'application/json',
-                    }
+                    },
+                    body: JSON.stringify({ id: appointmentId })
                 });
 
                 const result = await response.json();
@@ -1380,7 +1747,7 @@
 
         async function refreshAppointments() {
             await loadAppointments();
-            showToast('Success', 'Appointments refreshed successfully!', 'success');
+            showToast('Success', 'Appointments refreshed!', 'success');
         }
 
         // Modal functions
@@ -1426,38 +1793,32 @@
             const formData = new FormData(event.target);
             const data = Object.fromEntries(formData);
             
-            const endpoint = authMode === 'login' ? '/api/auth/login' : '/api/auth/register';
-            
+            // For demo purposes, simulate successful auth
             try {
-                const response = await fetch(`http://localhost:8000${endpoint}`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify(data),
-                });
+                // In a real app, you would send this to your auth endpoint
+                showToast('Success', authMode === 'login' ? 'Signed in successfully!' : 'Account created successfully!', 'success');
+                closeModal('authModal');
                 
-                const result = await response.json();
+                // Store user data
+                const userData = {
+                    name: data.name || 'Demo User',
+                    email: data.email,
+                    date_of_birth: data.date_of_birth || '01/01/1990'
+                };
                 
-                if (result.success) {
-                    showToast('Success', authMode === 'login' ? 'Signed in successfully!' : 'Account created successfully!', 'success');
-                    closeModal('authModal');
-                    // Store user data and update UI
-                    localStorage.setItem('user', JSON.stringify(result.user));
-                    updateUserUI(result.user);
-                } else {
-                    showToast('Error', result.message || 'Authentication failed', 'error');
-                }
+                localStorage.setItem('user', JSON.stringify(userData));
+                currentUser = userData;
+                updateUserUI(userData);
+                
             } catch (error) {
-                showToast('Error', 'Failed to connect to server', 'error');
+                showToast('Error', 'Authentication failed', 'error');
             }
         }
 
         function updateUserUI(user) {
-            // Update navigation to show user info
-            const navActions = document.querySelector('.nav-actions');
+            const navActions = document.getElementById('navActions');
             navActions.innerHTML = `
-                <span style="margin-right: 1rem;">Welcome, ${user.name}</span>
+                <span style="margin-right: 1rem; color: var(--text-secondary);">Welcome, ${user.name}</span>
                 <button class="btn btn-secondary" onclick="logout()">Sign Out</button>
                 <button class="btn btn-primary" onclick="openChat()">Chat Now</button>
             `;
@@ -1465,40 +1826,89 @@
 
         function logout() {
             localStorage.removeItem('user');
-            location.reload();
+            currentUser = null;
+            const navActions = document.getElementById('navActions');
+            navActions.innerHTML = `
+                <button class="btn btn-secondary" onclick="openAuthModal('login')">Sign In</button>
+                <button class="btn btn-primary" onclick="openChat()">Chat Now</button>
+            `;
+            showToast('Success', 'Signed out successfully', 'success');
         }
 
-        function showToast(title, message, type) {
+        function showToast(title, message, type = 'success') {
+            // Remove any existing toasts
+            const existingToasts = document.querySelectorAll('.toast');
+            existingToasts.forEach(toast => toast.remove());
+            
             const toast = document.createElement('div');
             toast.className = `toast ${type}`;
             toast.innerHTML = `
-                <i class="fas fa-${type === 'success' ? 'check-circle' : 'exclamation-circle'}"></i>
+                <i class="fas fa-${type === 'success' ? 'check-circle' : type === 'error' ? 'exclamation-circle' : 'info-circle'}"></i>
                 <div>
                     <strong>${title}</strong>
-                    <p style="margin: 0;">${message}</p>
+                    <p style="margin: 0; font-size: 0.875rem;">${message}</p>
                 </div>
+                <button onclick="this.parentElement.remove()" style="background: none; border: none; color: inherit; cursor: pointer; font-size: 1.2rem;">&times;</button>
             `;
             document.body.appendChild(toast);
             
+            // Auto-remove after 5 seconds
             setTimeout(() => {
-                toast.style.animation = 'slideOutRight 0.3s ease';
-                setTimeout(() => {
-                    if (toast.parentNode) {
-                        toast.parentNode.removeChild(toast);
-                    }
-                }, 300);
-            }, 3000);
+                if (toast.parentNode) {
+                    toast.style.animation = 'slideOutRight 0.3s ease';
+                    setTimeout(() => {
+                        if (toast.parentNode) {
+                            toast.parentNode.removeChild(toast);
+                        }
+                    }, 300);
+                }
+            }, 5000);
         }
 
         // Initialize on load
         document.addEventListener('DOMContentLoaded', function() {
+            console.log('DocAI Frontend initialized');
+            
+            // Check system health
+            checkSystemHealth();
+            
+            // Load initial appointments
             loadAppointments();
             
             // Check if user is logged in
-            const user = localStorage.getItem('user');
-            if (user) {
-                updateUserUI(JSON.parse(user));
+            try {
+                const userData = localStorage.getItem('user');
+                if (userData) {
+                    currentUser = JSON.parse(userData);
+                    updateUserUI(currentUser);
+                }
+            } catch (e) {
+                console.error('Error loading user data:', e);
             }
+            
+            // Periodic health check
+            setInterval(checkSystemHealth, 30000); // Check every 30 seconds
+        });
+
+        // Add some quick message functions for easier testing
+        function sendQuickMessage(message) {
+            if (!chatOpen) {
+                openChat();
+            }
+            setTimeout(() => {
+                document.getElementById('chatInput').value = message;
+                sendMessage();
+            }, 300);
+        }
+
+        // Add click-to-close modal functionality
+        document.addEventListener('click', function(event) {
+            const modals = document.querySelectorAll('.modal.active');
+            modals.forEach(modal => {
+                if (event.target === modal) {
+                    modal.classList.remove('active');
+                }
+            });
         });
     </script>
 </body>
