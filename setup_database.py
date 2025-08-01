@@ -200,7 +200,10 @@ def verify_database_setup(cursor):
     
     for table in expected_tables:
         try:
-            cursor.execute(f"SELECT COUNT(*) FROM {table}")
+            # Use parameterized query with psycopg2.sql for safe table name handling
+            from psycopg2 import sql
+            query = sql.SQL("SELECT COUNT(*) FROM {}").format(sql.Identifier(table))
+            cursor.execute(query)
             count = cursor.fetchone()[0]
             print(f"   ✅ {table}: {count} records")
         except Exception as e:

@@ -418,7 +418,10 @@ def generate_test_report():
         
         tables = ['specializations', 'departments', 'doctors', 'patients', 'doctor_availability', 'appointments']
         for table in tables:
-            cursor.execute(f"SELECT COUNT(*) as count FROM {table}")
+            # Use parameterized query with psycopg2.sql for safe table name handling
+            from psycopg2 import sql
+            query = sql.SQL("SELECT COUNT(*) as count FROM {}").format(sql.Identifier(table))
+            cursor.execute(query)
             stats[table] = cursor.fetchone()['count']
         
         # Appointment status breakdown
