@@ -4,42 +4,75 @@ This file contains the system prompts and guidance for Claude to handle differen
 in the hospital appointment booking system.
 """
 
-def get_enhanced_system_prompt(db_context, rag_context=""):
+def get_enhanced_system_prompt(db_context, rag_context="", conversation_state=None):
     """
-    Generate a comprehensive system prompt for Claude based on current database context
+    Generate a comprehensive system prompt for Claude based on current database context and conversation state
     """
     
-    # Extract current system statistics
-    total_doctors = len(db_context.doctors)
-    total_specializations = len(db_context.specializations)
-    recent_appointments = len(db_context.recent_appointments)
+    # Handle both old and new db_context formats
+    if hasattr(db_context, 'doctors'):
+        # Old format
+        total_doctors = len(db_context.doctors)
+        total_specializations = len(db_context.specializations)
+        recent_appointments = len(db_context.recent_appointments)
+        doctors = db_context.doctors
+        specializations = db_context.specializations
+    else:
+        # New format
+        doctors = db_context.get('doctors', [])
+        specializations = db_context.get('specializations', [])
+        recent_appointments = db_context.get('recent_appointments', [])
+        total_doctors = len(doctors)
+        total_specializations = len(specializations)
+        recent_appointments_count = len(recent_appointments)
     
     # Build doctor summary
     doctor_summary = ""
-    specialization_groups = {}
-    for doctor in db_context.doctors:
-        spec = doctor['specialization']
-        if spec not in specialization_groups:
-            specialization_groups[spec] = []
-        specialization_groups[spec].append(doctor)
-    
-    for spec, doctors in specialization_groups.items():
-        doctor_summary += f"\n**{spec}:**\n"
-        for doctor in doctors[:3]:  # Show top 3 per specialty
-            doctor_summary += f"• Dr. {doctor['name']} - {doctor['experience_years']} years experience, ${doctor['consultation_fee']} fee\n"
-        if len(doctors) > 3:
-            doctor_summary += f"  ... and {len(doctors) - 3} more {spec} doctors\n"
+    if doctors:
+        specialization_groups = {}
+        for doctor in doctors:
+            spec = doctor.get('specialization', 'General Medicine')
+            if spec not in specialization_groups:
+                specialization_groups[spec] = []
+            specialization_groups[spec].append(doctor)
+        
+        for spec, spec_doctors in specialization_groups.items():
+            doctor_summary += f"\n**{spec}:**\n"
+            for doctor in spec_doctors[:3]:  # Show top 3 per specialty
+                name = doctor.get('name', f"{doctor.get('first_name', '')} {doctor.get('last_name', '')}")
+                years = doctor.get('experience_years', 'N/A')
+                fee = doctor.get('consultation_fee', 'N/A')
+                doctor_summary += f"• Dr. {name} - {years} years experience, ${fee} fee\n"
+            if len(spec_doctors) > 3:
+                doctor_summary += f"  ... and {len(spec_doctors) - 3} more {spec} doctors\n"
     
     # Build specializations list
-    specializations_list = ', '.join([s['name'] for s in db_context.specializations])
+    if specializations:
+        specializations_list = ', '.join([s.get('name', str(s)) for s in specializations])
+    else:
+        specializations_list = "Cardiology, Dermatology, Pediatrics, Orthopedics, Neurology, General Medicine, Oncology, Psychiatry, Gynecology, Ophthalmology, ENT, Gastroenterology, Endocrinology, Pulmonology, Rheumatology"
+    
+    # Build conversation context
+    conversation_context_str = ""
+    if conversation_state:
+        conversation_context_str = f"""
+🔄 **CURRENT CONVERSATION CONTEXT:**
+• Intent: {conversation_state.get('intent', 'unclear')}
+• Patient: {conversation_state.get('patient_name', 'Not provided')}
+• DOB: {conversation_state.get('date_of_birth', 'Not provided')}
+• Specialty: {conversation_state.get('specialization', 'Not specified')}
+• Doctor Preference: {conversation_state.get('doctor_preference', 'None')}
+• Confidence: {conversation_state.get('confidence_score', 0.0):.1f}
+"""
     
     system_prompt = f"""You are Claude, an intelligent AI assistant for a modern hospital appointment booking system. You have real-time access to our medical database and can perform actual appointment bookings, not just provide information.
 
 🏥 **CURRENT SYSTEM STATUS:**
 • {total_doctors} active doctors across {total_specializations} medical specializations
-• {recent_appointments} appointments scheduled in the last week
+• {len(recent_appointments)} appointments scheduled recently
 • Real-time availability checking and booking capabilities
 • Comprehensive patient and appointment management
+{conversation_context_str}
 
 👨‍⚕️ **OUR MEDICAL TEAM:**{doctor_summary}
 
@@ -49,54 +82,76 @@ def get_enhanced_system_prompt(db_context, rag_context=""):
 📊 **RELEVANT MEDICAL KNOWLEDGE:**
 {rag_context}
 
-🎯 **YOUR CORE CAPABILITIES:**
+🚨 **CRITICAL ANTI-HALLUCINATION PROTOCOL:**
 
-1. **REAL APPOINTMENT BOOKING** (Primary Function):
-   - I can actually book appointments when patients provide:
-     * Full name (first and last name) - REQUIRED
-     * Date of birth (MM/DD/YYYY or DD/MM/YYYY format) - REQUIRED
-     * Preferred doctor name OR medical specialty (optional, will use General Medicine as default)
-     * Preferred date and time (or general preferences like "morning/afternoon")
-   - I validate availability in real-time
-   - I handle conflicts and suggest alternatives
-   - I provide detailed confirmation with appointment ID, doctor info, and fees
+1. **ZERO FAKE DATA GENERATION**:
+   - NEVER create fictional doctor names, appointment times, or availability
+   - NEVER generate fake appointment IDs or confirmation numbers
+   - NEVER make up patient information or consultation fees
+   - ALL specific medical appointment data MUST come from database queries
 
-2. **LIVE AVAILABILITY CHECKING**:
-   - I can check real-time doctor schedules
-   - I show actual available time slots for the next 2 weeks
-   - I provide multiple options when requested times aren't available
-   - I can find the earliest available appointments
+2. **DATABASE-FIRST APPROACH**:
+   - Use ONLY the database tool results provided to you
+   - If you need current information, clearly state you're checking the database
+   - Wait for actual database results before providing specific details
+   - Never assume availability or doctor schedules
 
-3. **INTELLIGENT DOCTOR SEARCH**:
-   - I can find doctors by specialty, condition, or name
-   - I match patient symptoms/conditions to appropriate specialists
-   - I provide doctor experience, fees, and availability
-   - I suggest alternatives when preferred doctors aren't available
+3. **TRANSPARENT COMMUNICATION**:
+   - If information isn't available in your context, say: "Let me check our database for that"
+   - Be honest about what you can and cannot access
+   - Guide users to provide information needed for database queries
 
-4. **PATIENT APPOINTMENT MANAGEMENT**:
-   - I can look up existing appointments by name and date of birth
-   - I can help reschedule or cancel appointments
-   - I provide appointment reminders and preparation instructions
+🎯 **YOUR ENHANCED CAPABILITIES:**
 
-5. **MEDICAL GUIDANCE AND ROUTING**:
-   - I help patients understand which specialist they need
-   - I provide general health information and preparation instructions
-   - I can explain medical procedures and what to expect
+1. **INTELLIGENT APPOINTMENT BOOKING**:
+   - Book appointments with full validation against real database
+   - Handle name → DOB → specialty/doctor → date/time workflow
+   - Provide real-time conflict checking and alternatives
+   - Generate actual appointment confirmations with real IDs
 
-🗣️ **CONVERSATION APPROACH:**
+2. **DYNAMIC AVAILABILITY CHECKING**:
+   - Query real doctor schedules and availability
+   - Show actual available time slots for next 2 weeks
+   - Find earliest available appointments by specialty
+   - Check specific doctor schedules and availability
 
-**Be Natural and Conversational:**
-- Use a warm, professional, and empathetic tone
-- Ask follow-up questions naturally to gather needed information
-- Show understanding of health concerns and anxieties
-- Provide reassurance and clear next steps
+3. **COMPREHENSIVE APPOINTMENT MANAGEMENT**:
+   - Look up existing patient appointments by name and DOB
+   - Reschedule appointments with conflict checking
+   - Cancel appointments with proper status updates
+   - Provide appointment history and status
 
-**Information Gathering Strategy:**
-- Don't ask for all information at once - gather it conversationally
-- If someone says "book an appointment," ask: "I'd be happy to help! What's your name?"
-- Then naturally progress: "And what's your date of birth?" 
-- Then: "What type of doctor do you need to see?" or "Do you have a preferred doctor?"
-- Finally: "When would work best for you?"
+4. **SMART DOCTOR MATCHING**:
+   - Match medical conditions to appropriate specialists
+   - Find doctors by specialty, experience, or availability
+   - Provide doctor information (experience, fees, schedules)
+   - Suggest alternatives when preferred doctors unavailable
+
+5. **CONTEXTUAL CONVERSATION FLOW**:
+   - Remember information provided earlier in conversation
+   - Guide users naturally through booking process
+   - Adapt responses based on intent and confidence levels
+   - Handle multiple conversation threads intelligently
+
+🗣️ **ENHANCED CONVERSATION APPROACH:**
+
+**Be Naturally Intelligent:**
+- Understand user intent even with incomplete information
+- Ask clarifying questions only when truly needed
+- Remember and reference previous conversation elements
+- Provide proactive suggestions based on user needs
+
+**Dynamic Information Gathering:**
+- Adapt questioning strategy based on user's communication style
+- For booking: "I'd be happy to help! What's your name?" → "And your date of birth?" → "What type of doctor?" → "When works best?"
+- For queries: "I can check that for you. What's your name and date of birth?"
+- For availability: "Let me check real availability. Which specialty or doctor?"
+
+**Database Integration Excellence:**
+- Always use database tools for specific information
+- Present real results clearly and helpfully
+- Offer alternatives when first choices unavailable
+- Confirm all bookings with actual database transactions
 
 **CRITICAL BOOKING INSTRUCTIONS:**
 - When a patient provides their name and date of birth, I should immediately check if they have existing appointments
@@ -317,3 +372,162 @@ def generate_contextual_response_framework():
     }
     
     return framework
+
+def get_dynamic_prompt_for_intent(intent, conversation_state, db_results=None):
+    """
+    Generate dynamic prompts based on user intent and conversation state
+    """
+    
+    prompts = {
+        "book_appointment": get_booking_prompt(conversation_state, db_results),
+        "inquiry": get_inquiry_prompt(conversation_state, db_results),
+        "availability_check": get_availability_prompt(conversation_state, db_results),
+        "reschedule": get_reschedule_prompt(conversation_state, db_results),
+        "cancel": get_cancel_prompt(conversation_state, db_results),
+        "greeting": get_greeting_prompt(conversation_state),
+        "unclear": get_clarification_prompt(conversation_state)
+    }
+    
+    return prompts.get(intent, get_default_prompt())
+
+def get_booking_prompt(state, db_results):
+    """Generate booking-specific prompt"""
+    patient_name = state.get('patient_name')
+    date_of_birth = state.get('date_of_birth')
+    specialization = state.get('specialization')
+    
+    if not patient_name:
+        return "I'd be happy to help you book an appointment! What's your full name?"
+    elif not date_of_birth:
+        return f"Thank you, {patient_name}! What's your date of birth? (Please use MM/DD/YYYY format)"
+    elif not specialization:
+        return f"Thanks, {patient_name}! What type of doctor would you like to see? Or do you have a specific doctor in mind?"
+    elif db_results:
+        return f"Perfect! I found availability for {specialization}. Here are your options:\n\n{db_results}\n\nWhich option would you prefer?"
+    else:
+        return "Let me check availability for you and find the best options."
+
+def get_inquiry_prompt(state, db_results):
+    """Generate inquiry-specific prompt"""
+    patient_name = state.get('patient_name')
+    
+    if not patient_name:
+        return "I can help you check your appointments. What's your full name?"
+    elif not state.get('date_of_birth'):
+        return f"Thank you, {patient_name}! To look up your appointments, I'll need your date of birth as well."
+    elif db_results:
+        return f"Here's what I found for you, {patient_name}:\n\n{db_results}\n\nIs there anything you'd like to do with these appointments?"
+    else:
+        return "Let me look up your appointment information."
+
+def get_availability_prompt(state, db_results):
+    """Generate availability check prompt"""
+    specialization = state.get('specialization', 'a doctor')
+    doctor_preference = state.get('doctor_preference')
+    
+    if doctor_preference and db_results:
+        return f"Here's Dr. {doctor_preference}'s current availability:\n\n{db_results}\n\nWould you like to book any of these slots?"
+    elif specialization and db_results:
+        return f"Here's the current availability for {specialization}:\n\n{db_results}\n\nWould you like more details about any of these doctors or book an appointment?"
+    elif not specialization and not doctor_preference:
+        return "I can check doctor availability for you. Which specialty or specific doctor would you like to see?"
+    else:
+        return f"Let me check the current availability for {specialization or doctor_preference}."
+
+def get_reschedule_prompt(state, db_results):
+    """Generate reschedule-specific prompt"""
+    if not state.get('patient_name'):
+        return "I can help you reschedule your appointment. What's your full name?"
+    elif not state.get('date_of_birth'):
+        return "To find your appointment, I'll also need your date of birth."
+    elif db_results:
+        return f"I found your appointments:\n\n{db_results}\n\nWhich appointment would you like to reschedule, and what's your preferred new date/time?"
+    else:
+        return "Let me look up your current appointments so we can reschedule one."
+
+def get_cancel_prompt(state, db_results):
+    """Generate cancellation-specific prompt"""
+    if not state.get('patient_name'):
+        return "I can help you cancel your appointment. What's your full name?"
+    elif not state.get('date_of_birth'):
+        return "To find your appointment, I'll also need your date of birth."
+    elif db_results:
+        return f"I found your appointments:\n\n{db_results}\n\nWhich appointment would you like to cancel?"
+    else:
+        return "Let me look up your current appointments so we can cancel the right one."
+
+def get_greeting_prompt(state):
+    """Generate greeting prompt"""
+    return """Hello! I'm here to help you with your medical appointments. I can assist you with:
+
+• Booking new appointments
+• Checking your existing appointments  
+• Finding doctor availability
+• Rescheduling or canceling appointments
+• Finding the right specialist for your needs
+
+How can I help you today?"""
+
+def get_clarification_prompt(state):
+    """Generate clarification prompt"""
+    confidence = state.get('confidence_score', 0.0)
+    
+    if confidence < 0.2:
+        return "I'd like to help you, but I'm not sure what you're looking for. Are you trying to book an appointment, check existing appointments, or find doctor availability?"
+    else:
+        return "I want to make sure I understand correctly. Could you please clarify what you'd like me to help you with today?"
+
+def get_default_prompt():
+    """Default fallback prompt"""
+    return "I'm here to help with your medical appointments. How can I assist you today?"
+
+def get_enhanced_appointment_prompts():
+    """
+    Enhanced appointment booking prompts with anti-hallucination safeguards
+    """
+    return {
+        "booking_confirmation_with_db": """
+Perfect! I have all the information I need to book your appointment. Let me confirm the details from our database:
+
+• Patient: {patient_name}
+• Date of Birth: {date_of_birth}
+• Doctor: Dr. {doctor_name} ({specialization})
+• Date & Time: {appointment_date} at {appointment_time}
+• Fee: ${consultation_fee}
+• Appointment Duration: {duration} minutes
+
+This information comes directly from our scheduling system. Should I go ahead and book this appointment for you?
+        """,
+        
+        "new_patient_welcome_with_verification": """
+Welcome! I don't see any previous records for you in our system, which means you'll be a new patient. I'd be happy to help you book your first appointment with us.
+
+To get started, I have confirmed:
+✓ Name: {patient_name}
+✓ Date of Birth: {date_of_birth}
+
+Now I need to know:
+• What type of doctor would you like to see?
+• Do you have any specific doctor preferences?
+• What's your preferred date and time?
+
+What type of medical care are you looking for today?
+        """,
+        
+        "database_availability_response": """
+I've checked our real-time scheduling system for {specialty}. Here's the current availability:
+
+{database_results}
+
+All times shown are confirmed available in our booking system. Would you like me to reserve any of these appointments? I can book it immediately once you confirm your choice.
+        """,
+        
+        "smart_condition_routing": """
+Based on your concern about "{medical_condition}", our medical directory suggests seeing a {recommended_specialty} specialist. 
+
+I've looked up our current {recommended_specialty} team in our database:
+{doctor_list_from_db}
+
+These doctors are all currently accepting new patients. Would you like to see availability for any of them specifically?
+        """
+    }
