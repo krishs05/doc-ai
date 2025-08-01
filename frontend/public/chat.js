@@ -145,62 +145,84 @@ class ChatInterface {
         this.showTypingIndicator();
         this.isTyping = true;
   
-        try {
-            console.log('Sending message to:', `${this.apiBaseUrl}/api/chat`);
-            const response = await fetch(`${this.apiBaseUrl}/api/chat`, {
+                try {
+            console.log('Sending message to:', `${this.apiBaseUrl}/ask`);
+            
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+            
+            const response = await fetch(`${this.apiBaseUrl}/ask`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
+                    'Accept': 'application/json'
                 },
                 credentials: 'include',
                 body: JSON.stringify({ 
-                    message: message,
+                    question: message,
                     session_id: this.sessionId
                 }),
+                signal: controller.signal
             });
-  
+            
+            clearTimeout(timeoutId);
+
             if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
+                let errorMessage = `Server error (${response.status})`;
+                try {
+                    const errorData = await response.json();
+                    errorMessage = errorData.error || errorData.message || errorMessage;
+                } catch (e) {
+                    errorMessage = response.statusText || errorMessage;
+                }
+                throw new Error(errorMessage);
             }
-  
+
             const data = await response.json();
             console.log('Chat response:', data);
             
             this.hideTypingIndicator();
             this.isTyping = false;
-  
-            if (data.success) {
-                this.addMessage(data.response, 'ai');
-                
-                // Update session ID if provided
-                if (data.session_id) {
-                    this.sessionId = data.session_id;
-                }
-                
-                // Check if an appointment was booked
-                if (data.appointment_booked) {
-                    console.log('Appointment was booked, refreshing appointments list...');
-                    this.showSuccessMessage("Appointment booked successfully!");
-                    
-                    // Refresh appointments list if it exists
-                    setTimeout(() => {
-                        this.refreshAppointmentsList();
-                    }, 1000);
-                }
-                
-                // Update suggestions based on context
-                this.updateSuggestions(data.context);
-                
-            } else {
-                this.addMessage('Sorry, I encountered an error. Please try again.', 'ai');
-                console.error('Chat error:', data.error);
+
+            // Handle different response formats
+            const aiResponse = data.answer || data.response || data.message || 'I received your message but could not generate a proper response.';
+            this.addMessage(aiResponse, 'ai');
+            
+            // Update session ID if provided
+            if (data.session_id) {
+                this.sessionId = data.session_id;
             }
-  
+            
+            // Check if an appointment was booked
+            if (data.appointment_booked || aiResponse.toLowerCase().includes('booked') || 
+                aiResponse.toLowerCase().includes('scheduled') || 
+                aiResponse.toLowerCase().includes('appointment')) {
+                console.log('Appointment action detected, refreshing appointments list...');
+                this.showSuccessMessage("Request processed successfully!");
+                
+                // Refresh appointments list if it exists
+                setTimeout(() => {
+                    this.refreshAppointmentsList();
+                }, 1000);
+            }
+            
+            // Update suggestions based on context
+            this.updateSuggestions(data.context);
+
         } catch (error) {
             console.error('Chat request failed:', error);
             this.hideTypingIndicator();
             this.isTyping = false;
-            this.addMessage('Sorry, I could not connect to the server. Please check your connection and try again.', 'ai');
+            
+            let errorMessage = 'Sorry, I could not connect to the server. Please check your connection and try again.';
+            
+            if (error.name === 'AbortError') {
+                errorMessage = 'Request timed out. Please try again with a shorter message.';
+            } else if (error.message && !error.message.includes('fetch')) {
+                errorMessage = `Sorry, there was an error: ${error.message}`;
+            }
+            
+            this.addMessage(errorMessage, 'ai');
         }
     }
   

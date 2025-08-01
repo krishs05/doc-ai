@@ -90,10 +90,16 @@ class DocAIApp {
 
           console.log('Loading appointments from:', `${this.apiBaseUrl}/api/appointments`);
           
-          const response = await fetch(`${this.apiBaseUrl}/api/appointments`);
+          const response = await fetch(`${this.apiBaseUrl}/api/appointments`, {
+              method: 'GET',
+              headers: {
+                  'Content-Type': 'application/json',
+                  'Accept': 'application/json'
+              }
+          });
           
           if (!response.ok) {
-              throw new Error(`HTTP error! status: ${response.status}`);
+              throw new Error(`HTTP error! status: ${response.status} - ${response.statusText}`);
           }
           
           const appointments = await response.json();
@@ -108,9 +114,10 @@ class DocAIApp {
               <div class="error-appointments">
                   <i class="fas fa-exclamation-triangle"></i>
                   <h3>Unable to load appointments</h3>
-                  <p>There was an error loading your appointments. Please try again.</p>
+                  <p>There was an error loading your appointments: ${error.message}</p>
+                  <p class="error-details">Please check if the backend server is running on port 8000.</p>
                   <button class="btn-primary" onclick="app.loadAppointments()">
-                      <i class="fas fa-retry"></i>
+                      <i class="fas fa-refresh"></i>
                       Try Again
                   </button>
               </div>
@@ -190,6 +197,7 @@ class DocAIApp {
               day: 'numeric'
           });
       } catch (error) {
+          console.warn('Error formatting date:', error);
           return dateString;
       }
   }
@@ -198,14 +206,20 @@ class DocAIApp {
       if (!timeString) return 'Time TBD';
       
       try {
-          // Handle both full datetime and time-only strings
-          const date = timeString.includes('T') ? new Date(timeString) : new Date(`1970-01-01T${timeString}`);
-          return date.toLocaleTimeString('en-US', {
-              hour: 'numeric',
-              minute: '2-digit',
-              hour12: true
-          });
+          // Handle different time formats
+          if (timeString.includes(':')) {
+              const [hours, minutes] = timeString.split(':');
+              const date = new Date();
+              date.setHours(parseInt(hours), parseInt(minutes));
+              return date.toLocaleTimeString('en-US', {
+                  hour: 'numeric',
+                  minute: '2-digit',
+                  hour12: true
+              });
+          }
+          return timeString;
       } catch (error) {
+          console.warn('Error formatting time:', error);
           return timeString;
       }
   }
@@ -216,77 +230,117 @@ class DocAIApp {
           'confirmed': 'Confirmed',
           'completed': 'Completed',
           'cancelled': 'Cancelled',
-          'no-show': 'No Show'
+          'pending': 'Pending'
       };
-      return statusMap[status] || status;
+      return statusMap[status] || status.charAt(0).toUpperCase() + status.slice(1);
   }
 
-  handleServiceClick(index) {
-      const serviceActions = [
-          'I want to book an appointment',
-          'What doctors are available?',
-          'I need help with my healthcare'
-      ];
+  async rescheduleAppointment(appointmentId) {
+      try {
+          const confirmed = await this.showConfirmDialog(
+              'Reschedule Appointment',
+              'Would you like to reschedule this appointment? Our AI assistant will help you find a new time slot.'
+          );
 
-      if (window.chat && serviceActions[index]) {
-          window.chat.openChat();
-          setTimeout(() => {
-              window.chat.sendSuggestion(serviceActions[index]);
-          }, 500);
+          if (confirmed) {
+              // Open chat with reschedule context
+              if (window.chat) {
+                  window.chat.openChat();
+                  setTimeout(() => {
+                      window.chat.sendSuggestion(`I want to reschedule appointment ID ${appointmentId}`);
+                  }, 500);
+              }
+          }
+      } catch (error) {
+          console.error('Error in rescheduleAppointment:', error);
+          this.showNotification('Error initiating reschedule process', 'error');
       }
   }
 
-  async refreshAppointments() {
-      await this.loadAppointments();
-      this.showNotification('Appointments refreshed successfully!', 'success');
-  }
+  async viewAppointment(appointmentId) {
+      try {
+          const appointment = this.appointments.find(apt => apt.id === appointmentId);
+          if (!appointment) {
+              this.showNotification('Appointment not found', 'error');
+              return;
+          }
 
-  rescheduleAppointment(appointmentId) {
-      if (window.chat) {
-          window.chat.openChat();
-          setTimeout(() => {
-              window.chat.sendSuggestion(`I need to reschedule appointment #${appointmentId}`);
-          }, 500);
-      }
-  }
-
-  viewAppointment(appointmentId) {
-      const appointment = this.appointments.find(apt => apt.id === appointmentId);
-      if (appointment) {
-          const modal = this.createModal('Appointment Details', `
+          const modalContent = `
               <div class="appointment-details-modal">
-                  <div class="detail-group">
-                      <h4>Patient Information</h4>
-                      <p><strong>Name:</strong> ${appointment.patient_name}</p>
-                      <p><strong>Appointment ID:</strong> #${appointment.id}</p>
+                  <div class="detail-section">
+                      <h4><i class="fas fa-user-md"></i> Doctor Information</h4>
+                      <p><strong>Name:</strong> Dr. ${appointment.doctor_name || 'Unknown'}</p>
+                      <p><strong>Specialization:</strong> ${appointment.specialization || 'General Medicine'}</p>
                   </div>
-                  <div class="detail-group">
-                      <h4>Doctor Information</h4>
-                      <p><strong>Doctor:</strong> Dr. ${appointment.doctor_name}</p>
-                      <p><strong>Specialty:</strong> ${appointment.specialization}</p>
-                  </div>
-                  <div class="detail-group">
-                      <h4>Appointment Details</h4>
+                  <div class="detail-section">
+                      <h4><i class="fas fa-calendar-check"></i> Appointment Details</h4>
                       <p><strong>Date:</strong> ${this.formatDate(appointment.appointment_date)}</p>
                       <p><strong>Time:</strong> ${this.formatTime(appointment.appointment_time)}</p>
+                      <p><strong>Status:</strong> <span class="status-badge status-${appointment.status}">${this.formatStatus(appointment.status)}</span></p>
+                  </div>
+                  <div class="detail-section">
+                      <h4><i class="fas fa-user"></i> Patient Information</h4>
+                      <p><strong>Name:</strong> ${appointment.patient_name || 'Unknown'}</p>
                       <p><strong>Reason:</strong> ${appointment.reason || 'General consultation'}</p>
-                      <p><strong>Status:</strong> ${this.formatStatus(appointment.status)}</p>
+                  </div>
+                  ${appointment.notes ? `
+                      <div class="detail-section">
+                          <h4><i class="fas fa-sticky-note"></i> Notes</h4>
+                          <p>${appointment.notes}</p>
+                      </div>
+                  ` : ''}
+                  <div class="modal-actions">
+                      <button class="btn-outline" onclick="app.rescheduleAppointment(${appointmentId})">
+                          <i class="fas fa-calendar-alt"></i> Reschedule
+                      </button>
+                      <button class="btn-danger" onclick="app.cancelAppointment(${appointmentId})">
+                          <i class="fas fa-times"></i> Cancel Appointment
+                      </button>
                   </div>
               </div>
-          `);
+          `;
+
+          const modal = this.createModal('Appointment Details', modalContent);
           this.showModal(modal);
+      } catch (error) {
+          console.error('Error viewing appointment:', error);
+          this.showNotification('Error loading appointment details', 'error');
       }
   }
 
   async cancelAppointment(appointmentId) {
-      const confirmed = await this.showConfirmDialog(
-          'Cancel Appointment',
-          'Are you sure you want to cancel this appointment? This action cannot be undone.'
-      );
+      try {
+          const confirmed = await this.showConfirmDialog(
+              'Cancel Appointment',
+              'Are you sure you want to cancel this appointment? This action cannot be undone.'
+          );
 
-      if (confirmed) {
-          // For now, just show a message since we don't have a cancel API endpoint
-          this.showNotification('Appointment cancellation requested. You will be contacted shortly.', 'info');
+          if (confirmed) {
+              // Show loading state
+              this.showNotification('Cancelling appointment...', 'info');
+
+              const response = await fetch(`${this.apiBaseUrl}/api/appointments/${appointmentId}`, {
+                  method: 'DELETE',
+                  headers: {
+                      'Content-Type': 'application/json'
+                  }
+              });
+
+              if (!response.ok) {
+                  throw new Error(`Failed to cancel appointment: ${response.statusText}`);
+              }
+
+              this.showNotification('Appointment cancelled successfully', 'success');
+              
+              // Refresh the appointments list
+              await this.loadAppointments();
+              
+              // Close any open modals
+              this.closeModal();
+          }
+      } catch (error) {
+          console.error('Error cancelling appointment:', error);
+          this.showNotification(`Error cancelling appointment: ${error.message}`, 'error');
       }
   }
 
