@@ -399,6 +399,494 @@ def query_patient_appointments(patient_name: str, date_of_birth: str) -> str:
         return f"Error querying appointments: {str(e)}"
 
 @tool
+def reschedule_appointment(appointment_id: int, new_date: str, new_time: str = None) -> str:
+    """Reschedule an existing appointment to a new date and time"""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return "Unable to connect to appointment system"
+        
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            # First, verify the appointment exists and get current details
+            cursor.execute("""
+                SELECT a.id, a.appointment_date, a.appointment_time, a.patient_id, a.doctor_id,
+                       p.first_name as patient_first, p.last_name as patient_last,
+                       d.first_name as doctor_first, d.last_name as doctor_last,
+                       s.name as specialization
+                FROM appointments a
+                JOIN patients p ON a.patient_id = p.id
+                JOIN doctors d ON a.doctor_id = d.id
+                JOIN specializations s ON d.specialization_id = s.id
+                WHERE a.id = %s AND a.status NOT IN ('cancelled', 'completed')
+            """, (appointment_id,))
+            
+            appointment = cursor.fetchone()
+            if not appointment:
+                return f"Appointment #{appointment_id} not found or cannot be rescheduled"
+            
+            # Parse new date
+            try:
+                if new_date.lower() in ['today', 'tomorrow']:
+                    if new_date.lower() == 'today':
+                        new_appointment_date = date.today()
+                    else:
+                        new_appointment_date = date.today() + timedelta(days=1)
+                else:
+                    new_appointment_date = dateutil.parser.parse(new_date).date()
+            except:
+                return "Invalid date format. Please use a clear date format like 'MM/DD/YYYY' or 'tomorrow'"
+            
+            # Parse new time
+            try:
+                if new_time:
+                    if new_time.lower() in ['morning', 'afternoon', 'evening']:
+                        time_preferences = {
+                            'morning': time(9, 0),
+                            'afternoon': time(14, 0),
+                            'evening': time(17, 0)
+                        }
+                        new_appointment_time = time_preferences[new_time.lower()]
+                    else:
+                        new_appointment_time = dateutil.parser.parse(new_time).time()
+                else:
+                    new_appointment_time = appointment['appointment_time']  # Keep current time
+            except:
+                return "Invalid time format. Please use format like '2:00 PM' or 'morning/afternoon'"
+            
+            # Check for conflicts with the new slot
+            cursor.execute("""
+                SELECT id FROM appointments 
+                WHERE doctor_id = %s AND appointment_date = %s AND appointment_time = %s
+                AND status NOT IN ('cancelled') AND id != %s
+            """, (appointment['doctor_id'], new_appointment_date, new_appointment_time, appointment_id))
+            
+            if cursor.fetchone():
+                return f"The requested time slot is already taken. Please choose a different time."
+            
+            # Update the appointment
+            cursor.execute("""
+                UPDATE appointments 
+                SET appointment_date = %s, appointment_time = %s, updated_at = %s
+                WHERE id = %s
+            """, (new_appointment_date, new_appointment_time, datetime.now(), appointment_id))
+            
+            conn.commit()
+            
+            success_message = (
+                f"✅ Appointment #{appointment_id} rescheduled successfully!\n\n"
+                f"Updated Details:\n"
+                f"• Patient: {appointment['patient_first']} {appointment['patient_last']}\n"
+                f"• Doctor: Dr. {appointment['doctor_first']} {appointment['doctor_last']} ({appointment['specialization']})\n"
+                f"• New Date: {new_appointment_date.strftime('%A, %B %d, %Y')}\n"
+                f"• New Time: {new_appointment_time.strftime('%I:%M %p')}\n"
+                f"• Previous Date: {appointment['appointment_date'].strftime('%A, %B %d, %Y')}\n"
+                f"• Previous Time: {appointment['appointment_time'].strftime('%I:%M %p')}"
+            )
+            
+            return success_message
+            
+    except Exception as e:
+        logger.error(f"Error rescheduling appointment: {e}")
+        if conn:
+            conn.rollback()
+        return f"Rescheduling failed: {str(e)}"
+
+@tool
+def cancel_appointment(appointment_id: int, cancellation_reason: str = "Patient requested") -> str:
+    """Cancel an existing appointment"""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return "Unable to connect to appointment system"
+        
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            # First, verify the appointment exists and get details
+            cursor.execute("""
+                SELECT a.id, a.appointment_date, a.appointment_time, a.status,
+                       p.first_name as patient_first, p.last_name as patient_last,
+                       d.first_name as doctor_first, d.last_name as doctor_last,
+                       s.name as specialization
+                FROM appointments a
+                JOIN patients p ON a.patient_id = p.id
+                JOIN doctors d ON a.doctor_id = d.id
+                JOIN specializations s ON d.specialization_id = s.id
+                WHERE a.id = %s
+            """, (appointment_id,))
+            
+            appointment = cursor.fetchone()
+            if not appointment:
+                return f"Appointment #{appointment_id} not found"
+            
+            if appointment['status'] == 'cancelled':
+                return f"Appointment #{appointment_id} is already cancelled"
+            
+            # Cancel the appointment
+            cursor.execute("""
+                UPDATE appointments 
+                SET status = 'cancelled', notes = %s, updated_at = %s
+                WHERE id = %s
+            """, (f"Cancelled: {cancellation_reason}", datetime.now(), appointment_id))
+            
+            conn.commit()
+            
+            success_message = (
+                f"❌ Appointment #{appointment_id} cancelled successfully\n\n"
+                f"Cancelled Appointment Details:\n"
+                f"• Patient: {appointment['patient_first']} {appointment['patient_last']}\n"
+                f"• Doctor: Dr. {appointment['doctor_first']} {appointment['doctor_last']} ({appointment['specialization']})\n"
+                f"• Date: {appointment['appointment_date'].strftime('%A, %B %d, %Y')}\n"
+                f"• Time: {appointment['appointment_time'].strftime('%I:%M %p')}\n"
+                f"• Reason: {cancellation_reason}\n\n"
+                f"Would you like me to help you book a new appointment?"
+            )
+            
+            return success_message
+            
+    except Exception as e:
+        logger.error(f"Error cancelling appointment: {e}")
+        if conn:
+            conn.rollback()
+        return f"Cancellation failed: {str(e)}"
+
+@tool
+def find_earliest_availability(specialization: str = "General Medicine", doctor_preference: str = None, days_ahead: int = 14) -> str:
+    """Find the earliest available appointment slots"""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return "Unable to connect to appointment system"
+        
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            # Build doctor query based on preferences
+            doctor_condition = ""
+            query_params = []
+            
+            if doctor_preference and doctor_preference.lower() not in ['any', 'no preference']:
+                doctor_condition = "AND CONCAT(d.first_name, ' ', d.last_name) ILIKE %s"
+                query_params.append(f"%{doctor_preference}%")
+            
+            # Get available doctors
+            cursor.execute(f"""
+                SELECT d.id, d.first_name, d.last_name, d.consultation_fee,
+                       s.name as specialization
+                FROM doctors d
+                JOIN specializations s ON d.specialization_id = s.id
+                WHERE s.name ILIKE %s AND d.is_active = TRUE {doctor_condition}
+                ORDER BY d.last_name, d.first_name
+            """, [f"%{specialization}%"] + query_params)
+            
+            doctors = cursor.fetchall()
+            if not doctors:
+                return f"No doctors found for {specialization}"
+            
+            earliest_slots = []
+            current_date = date.today()
+            end_date = current_date + timedelta(days=days_ahead)
+            
+            # Check each doctor's availability
+            for doctor in doctors:
+                cursor.execute("""
+                    SELECT da.day_of_week, da.start_time, da.end_time, da.slot_duration
+                    FROM doctor_availability da
+                    WHERE da.doctor_id = %s AND da.is_active = TRUE
+                    ORDER BY da.day_of_week, da.start_time
+                """, (doctor['id'],))
+                
+                availability = cursor.fetchall()
+                if not availability:
+                    continue
+                
+                # Find earliest slot for this doctor
+                check_date = current_date
+                while check_date <= end_date:
+                    day_of_week = check_date.weekday() + 1
+                    if day_of_week == 7:
+                        day_of_week = 0
+                    
+                    # Check if doctor is available on this day
+                    day_availability = [slot for slot in availability if slot['day_of_week'] == day_of_week]
+                    
+                    for slot in day_availability:
+                        slot_start = slot['start_time']
+                        slot_duration = slot['slot_duration'] or 30
+                        
+                        # Check if this slot is already booked
+                        cursor.execute("""
+                            SELECT id FROM appointments 
+                            WHERE doctor_id = %s AND appointment_date = %s AND appointment_time = %s
+                            AND status NOT IN ('cancelled')
+                        """, (doctor['id'], check_date, slot_start))
+                        
+                        if not cursor.fetchone():
+                            earliest_slots.append({
+                                'doctor': doctor,
+                                'date': check_date,
+                                'time': slot_start,
+                                'duration': slot_duration
+                            })
+                            break
+                    
+                    if earliest_slots and earliest_slots[-1]['doctor']['id'] == doctor['id']:
+                        break  # Found a slot for this doctor
+                    
+                    check_date += timedelta(days=1)
+            
+            if not earliest_slots:
+                return f"No available appointments found in the next {days_ahead} days for {specialization}"
+            
+            # Sort by date and time
+            earliest_slots.sort(key=lambda x: (x['date'], x['time']))
+            
+            result = f"🗓️ Earliest available appointments for {specialization}:\n\n"
+            
+            for i, slot in enumerate(earliest_slots[:5]):  # Show top 5 earliest
+                doctor = slot['doctor']
+                result += f"{i+1}. Dr. {doctor['first_name']} {doctor['last_name']}\n"
+                result += f"   📅 {slot['date'].strftime('%A, %B %d, %Y')}\n"
+                result += f"   🕐 {slot['time'].strftime('%I:%M %p')}\n"
+                result += f"   💰 ${doctor['consultation_fee']}\n\n"
+            
+            result += "Would you like me to book any of these appointments? I'll need your name and date of birth to proceed."
+            
+            return result
+            
+    except Exception as e:
+        logger.error(f"Error finding earliest availability: {e}")
+        return f"Error checking availability: {str(e)}"
+
+@tool
+def check_doctor_schedule(doctor_name: str, target_date: str = None, days_ahead: int = 7) -> str:
+    """Check a specific doctor's schedule and availability"""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return "Unable to connect to appointment system"
+        
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            # Find the doctor
+            cursor.execute("""
+                SELECT d.id, d.first_name, d.last_name, d.consultation_fee, d.experience_years,
+                       s.name as specialization
+                FROM doctors d
+                JOIN specializations s ON d.specialization_id = s.id
+                WHERE CONCAT(d.first_name, ' ', d.last_name) ILIKE %s AND d.is_active = TRUE
+            """, (f"%{doctor_name}%",))
+            
+            doctor = cursor.fetchone()
+            if not doctor:
+                return f"Doctor '{doctor_name}' not found. Please check the spelling or try searching by specialty."
+            
+            result = f"👨‍⚕️ Dr. {doctor['first_name']} {doctor['last_name']} ({doctor['specialization']})\n"
+            result += f"Experience: {doctor['experience_years']} years\n"
+            result += f"Consultation Fee: ${doctor['consultation_fee']}\n\n"
+            
+            if target_date:
+                # Check specific date
+                try:
+                    if target_date.lower() in ['today', 'tomorrow']:
+                        if target_date.lower() == 'today':
+                            check_date = date.today()
+                        else:
+                            check_date = date.today() + timedelta(days=1)
+                    else:
+                        check_date = dateutil.parser.parse(target_date).date()
+                    
+                    day_of_week = check_date.weekday() + 1
+                    if day_of_week == 7:
+                        day_of_week = 0
+                    
+                    # Get doctor's availability for that day
+                    cursor.execute("""
+                        SELECT da.start_time, da.end_time, da.slot_duration
+                        FROM doctor_availability da
+                        WHERE da.doctor_id = %s AND da.day_of_week = %s AND da.is_active = TRUE
+                    """, (doctor['id'], day_of_week))
+                    
+                    availability = cursor.fetchall()
+                    if not availability:
+                        result += f"❌ Not available on {check_date.strftime('%A, %B %d, %Y')}"
+                        return result
+                    
+                    result += f"📅 Availability on {check_date.strftime('%A, %B %d, %Y')}:\n"
+                    
+                    for slot in availability:
+                        start_time = slot['start_time']
+                        end_time = slot['end_time']
+                        
+                        # Check existing appointments
+                        cursor.execute("""
+                            SELECT appointment_time FROM appointments 
+                            WHERE doctor_id = %s AND appointment_date = %s 
+                            AND status NOT IN ('cancelled')
+                            ORDER BY appointment_time
+                        """, (doctor['id'], check_date))
+                        
+                        booked_times = [apt['appointment_time'] for apt in cursor.fetchall()]
+                        
+                        result += f"\n🕐 {start_time.strftime('%I:%M %p')} - {end_time.strftime('%I:%M %p')}\n"
+                        
+                        if booked_times:
+                            result += "   Booked slots:\n"
+                            for booked_time in booked_times:
+                                if start_time <= booked_time <= end_time:
+                                    result += f"   ❌ {booked_time.strftime('%I:%M %p')}\n"
+                        
+                        # Show available slots
+                        result += "   Available slots:\n"
+                        current_time = start_time
+                        slot_duration = slot['slot_duration'] or 30
+                        
+                        while current_time < end_time:
+                            if current_time not in booked_times:
+                                result += f"   ✅ {current_time.strftime('%I:%M %p')}\n"
+                            
+                            current_time = (datetime.combine(date.today(), current_time) + 
+                                          timedelta(minutes=slot_duration)).time()
+                
+                except Exception as e:
+                    result += f"Error parsing date: {str(e)}"
+            
+            else:
+                # Show general weekly schedule
+                cursor.execute("""
+                    SELECT da.day_of_week, da.start_time, da.end_time
+                    FROM doctor_availability da
+                    WHERE da.doctor_id = %s AND da.is_active = TRUE
+                    ORDER BY da.day_of_week, da.start_time
+                """, (doctor['id'],))
+                
+                weekly_availability = cursor.fetchall()
+                if weekly_availability:
+                    result += "📅 Weekly Schedule:\n"
+                    day_names = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+                    
+                    for slot in weekly_availability:
+                        day_name = day_names[slot['day_of_week']]
+                        start_time = slot['start_time'].strftime('%I:%M %p')
+                        end_time = slot['end_time'].strftime('%I:%M %p')
+                        result += f"• {day_name}: {start_time} - {end_time}\n"
+                
+                result += f"\nWould you like to check availability for a specific date or book an appointment?"
+            
+            return result
+            
+    except Exception as e:
+        logger.error(f"Error checking doctor schedule: {e}")
+        return f"Error checking schedule: {str(e)}"
+
+@tool
+def search_doctors_by_condition(medical_condition: str, patient_age: int = None) -> str:
+    """Find doctors best suited for a specific medical condition"""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return "Unable to connect to doctor database"
+        
+        # Medical condition to specialty mapping
+        condition_specialties = {
+            'heart': ['Cardiology'],
+            'chest pain': ['Cardiology'],
+            'blood pressure': ['Cardiology'],
+            'skin': ['Dermatology'],
+            'rash': ['Dermatology'],
+            'acne': ['Dermatology'],
+            'child': ['Pediatrics'],
+            'baby': ['Pediatrics'],
+            'pregnancy': ['Gynecology'],
+            'womens health': ['Gynecology'],
+            'bone': ['Orthopedics'],
+            'joint': ['Orthopedics'],
+            'back pain': ['Orthopedics'],
+            'headache': ['Neurology'],
+            'migraine': ['Neurology'],
+            'mental health': ['Psychiatry'],
+            'depression': ['Psychiatry'],
+            'anxiety': ['Psychiatry'],
+            'eye': ['Ophthalmology'],
+            'vision': ['Ophthalmology'],
+            'ear': ['ENT'],
+            'throat': ['ENT'],
+            'nose': ['ENT'],
+            'stomach': ['Gastroenterology'],
+            'digestive': ['Gastroenterology'],
+            'diabetes': ['Endocrinology'],
+            'thyroid': ['Endocrinology'],
+            'breathing': ['Pulmonology'],
+            'cough': ['Pulmonology'],
+            'arthritis': ['Rheumatology'],
+            'cancer': ['Oncology']
+        }
+        
+        # Find matching specialties
+        recommended_specialties = []
+        condition_lower = medical_condition.lower()
+        
+        for condition, specialties in condition_specialties.items():
+            if condition in condition_lower:
+                recommended_specialties.extend(specialties)
+        
+        # If no specific match, use General Medicine
+        if not recommended_specialties:
+            recommended_specialties = ['General Medicine']
+        
+        # Remove duplicates
+        recommended_specialties = list(set(recommended_specialties))
+        
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            # Get doctors for recommended specialties
+            specialty_placeholders = ','.join(['%s'] * len(recommended_specialties))
+            
+            cursor.execute(f"""
+                SELECT d.id, d.first_name, d.last_name, d.consultation_fee, d.experience_years,
+                       s.name as specialization
+                FROM doctors d
+                JOIN specializations s ON d.specialization_id = s.id
+                WHERE s.name = ANY(%s) AND d.is_active = TRUE
+                ORDER BY s.name, d.experience_years DESC, d.last_name
+            """, (recommended_specialties,))
+            
+            doctors = cursor.fetchall()
+            
+            if not doctors:
+                return f"I couldn't find specialists specifically for '{medical_condition}'. Would you like me to show you our General Medicine doctors instead?"
+            
+            result = f"🏥 Recommended doctors for '{medical_condition}':\n\n"
+            
+            # Group by specialty
+            by_specialty = {}
+            for doctor in doctors:
+                specialty = doctor['specialization']
+                if specialty not in by_specialty:
+                    by_specialty[specialty] = []
+                by_specialty[specialty].append(doctor)
+            
+            for specialty, spec_doctors in by_specialty.items():
+                result += f"**{specialty}:**\n"
+                
+                for doctor in spec_doctors[:3]:  # Top 3 per specialty
+                    result += f"• Dr. {doctor['first_name']} {doctor['last_name']}\n"
+                    result += f"  Experience: {doctor['experience_years']} years\n"
+                    result += f"  Consultation Fee: ${doctor['consultation_fee']}\n\n"
+                
+                if len(spec_doctors) > 3:
+                    result += f"  ... and {len(spec_doctors) - 3} more {specialty} doctors\n\n"
+            
+            # Add age-specific recommendations
+            if patient_age is not None:
+                if patient_age < 18:
+                    result += "💡 Since this is for someone under 18, I'd especially recommend our Pediatrics specialists.\n\n"
+                elif patient_age > 65:
+                    result += "💡 For patients over 65, our doctors have special experience with age-related care.\n\n"
+            
+            result += "Would you like to check availability for any of these doctors or book an appointment?"
+            
+            return result
+            
+    except Exception as e:
+        logger.error(f"Error searching doctors by condition: {e}")
+        return f"Error searching doctors: {str(e)}"
+
+@tool
 def book_appointment(patient_name: str, date_of_birth: str, specialization: str = "General Medicine", 
                     doctor_preference: str = None, preferred_date: str = None, preferred_time: str = None) -> str:
     """Book an appointment with proper validation"""
@@ -749,219 +1237,498 @@ def get_llm():
 # ============================================================================
 
 class HospitalState(TypedDict):
-    """State for LangGraph hospital conversation"""
+    """Enhanced state for LangGraph hospital conversation with comprehensive database integration"""
+    # Core conversation
     messages: Annotated[List[Dict[str, Any]], "The conversation messages"]
-    patient_name: Annotated[Optional[str], "Patient's full name"]
-    date_of_birth: Annotated[Optional[str], "Patient's date of birth"]
-    specialization: Annotated[Optional[str], "Medical specialization"]
-    doctor_preference: Annotated[Optional[str], "Preferred doctor"]
-    preferred_date: Annotated[Optional[str], "Preferred appointment date"]
-    preferred_time: Annotated[Optional[str], "Preferred appointment time"]
-    booking_intent: Annotated[bool, "Whether user wants to book"]
     session_id: Annotated[str, "Session identifier"]
     current_message: Annotated[str, "Current user message"]
     ai_response: Annotated[Optional[str], "AI response"]
-    tools_used: Annotated[List[str], "Tools used in this turn"]
+    
+    # Patient information
+    patient_name: Annotated[Optional[str], "Patient's full name"]
+    date_of_birth: Annotated[Optional[str], "Patient's date of birth"]
+    patient_id: Annotated[Optional[int], "Database patient ID if found"]
+    patient_exists: Annotated[bool, "Whether patient exists in database"]
+    
+    # Appointment preferences
+    specialization: Annotated[Optional[str], "Medical specialization"]
+    doctor_preference: Annotated[Optional[str], "Preferred doctor"]
+    doctor_id: Annotated[Optional[int], "Database doctor ID if found"]
+    preferred_date: Annotated[Optional[str], "Preferred appointment date"]
+    preferred_time: Annotated[Optional[str], "Preferred appointment time"]
+    urgency: Annotated[str, "Appointment urgency: urgent|routine|flexible"]
+    reason_for_visit: Annotated[Optional[str], "Reason for the appointment"]
+    
+    # Intent and workflow
+    intent: Annotated[str, "Primary user intent: book|reschedule|cancel|inquiry|availability|greeting"]
+    booking_intent: Annotated[bool, "Whether user wants to book"]
     should_book: Annotated[bool, "Whether to attempt booking"]
+    requires_clarification: Annotated[List[str], "Items needing clarification"]
+    
+    # Database query results
+    available_doctors: Annotated[List[Dict], "Doctors matching criteria"]
+    doctor_availability: Annotated[List[Dict], "Available time slots"]
+    existing_appointments: Annotated[List[Dict], "Patient's existing appointments"]
+    appointment_conflicts: Annotated[List[Dict], "Time slot conflicts"]
+    
+    # Tool tracking and decisions
+    tools_used: Annotated[List[str], "Tools used in this turn"]
+    database_queries_performed: Annotated[List[str], "Database queries executed"]
+    needs_database_check: Annotated[bool, "Whether database check is needed"]
+    ready_for_booking: Annotated[bool, "All required info gathered for booking"]
+    
+    # Context and enhancement
+    conversation_context: Annotated[Dict[str, Any], "Rich conversation context"]
+    db_context: Annotated[Dict[str, Any], "Current database context"]
+    last_tool_result: Annotated[Optional[str], "Result from last tool execution"]
+    confidence_score: Annotated[float, "Confidence in extracted information"]
 
 def extract_appointment_details(state: HospitalState) -> HospitalState:
-    """Extract appointment details from current message"""
+    """Extract appointment details using enhanced AI-powered analysis"""
     message = state["current_message"]
     
-    # Enhanced patterns for extraction
-    name_patterns = [
-        r'^([A-Z][a-z]+\s+[A-Z][a-z]+)\s*,\s*\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4}',
-        r'([A-Z][a-z]+\s+[A-Z][a-z]+)\s*,\s*\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4}',
-        r'(?:book|appointment|for)\s+([A-Z][a-z]+\s+[A-Z][a-z]+)\s*,\s*\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4}',
-        r'(?:book|appointment|for)\s+([A-Z][a-z]+\s+[A-Z][a-z]+)(?:\s*,|\s*for|\s*-)',
-        r'(?:for)\s+([A-Z][a-z]+\s+[A-Z][a-z]+)',
-        r'(?:name is|i am|i\'m|my name is|this is)\s+([a-zA-Z\s]+?)(?:\s*,|\s*$|\s*book|\s*schedule|\s*appointment)',
-        r'(?:patient|i\'m)\s+([a-zA-Z]+\s+[a-zA-Z]+)',
-        r'([A-Z][a-z]+\s+[A-Z][a-z]+)',
-    ]
+    # Use the enhanced Claude model for intelligent extraction
+    from bedrock import analyze_appointment_intent
     
-    dob_patterns = [
-        r',\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})',
-        r'(?:birth|born|dob|date of birth)[:\s]*?(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})',
-        r'\b(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})\b',
-    ]
+    try:
+        # Get enhanced context for better analysis
+        db_context = get_current_db_context()
+        enhanced_context = f"""
+CURRENT DATABASE CONTEXT:
+Available Specializations: {', '.join([s['name'] for s in db_context.get('specializations', [])])}
+Active Doctors: {len(db_context.get('doctors', []))}
+
+CONVERSATION HISTORY:
+{format_conversation_context(state.get('messages', []))}
+"""
+        
+        # Use AI to analyze intent and extract information
+        intent_result = analyze_appointment_intent(message, enhanced_context)
+        intent_data = json.loads(intent_result)
+        
+        # Update state with AI-extracted information
+        state["intent"] = intent_data.get("intent", "unclear")
+        state["confidence_score"] = intent_data.get("confidence", 0.0)
+        state["requires_clarification"] = intent_data.get("requires_clarification", [])
+        
+        # Extract patient information
+        extracted_info = intent_data.get("extracted_info", {})
+        if extracted_info.get("patient_name") and not state.get("patient_name"):
+            state["patient_name"] = extracted_info["patient_name"]
+        if extracted_info.get("date_of_birth") and not state.get("date_of_birth"):
+            state["date_of_birth"] = extracted_info["date_of_birth"]
+        
+        # Extract appointment preferences
+        preferences = intent_data.get("appointment_preferences", {})
+        if preferences.get("specialty") and not state.get("specialization"):
+            state["specialization"] = preferences["specialty"]
+        if preferences.get("doctor_name") and not state.get("doctor_preference"):
+            state["doctor_preference"] = preferences["doctor_name"]
+        if preferences.get("preferred_date") and not state.get("preferred_date"):
+            state["preferred_date"] = preferences["preferred_date"]
+        if preferences.get("preferred_time") and not state.get("preferred_time"):
+            state["preferred_time"] = preferences["preferred_time"]
+        if preferences.get("urgency"):
+            state["urgency"] = preferences["urgency"]
+        
+        # Set booking intent
+        booking_intents = ["book_appointment", "reschedule", "cancel"]
+        state["booking_intent"] = state["intent"] in booking_intents
+        
+        # Check if database validation is needed
+        state["needs_database_check"] = (
+            state.get("patient_name") and state.get("date_of_birth") and
+            state["intent"] in ["inquiry", "book_appointment", "reschedule", "cancel"]
+        )
+        
+        # Initialize default values for new state fields
+        state.setdefault("patient_exists", False)
+        state.setdefault("patient_id", None)
+        state.setdefault("doctor_id", None)
+        state.setdefault("available_doctors", [])
+        state.setdefault("doctor_availability", [])
+        state.setdefault("existing_appointments", [])
+        state.setdefault("appointment_conflicts", [])
+        state.setdefault("tools_used", [])
+        state.setdefault("database_queries_performed", [])
+        state.setdefault("ready_for_booking", False)
+        state.setdefault("conversation_context", {})
+        state.setdefault("db_context", db_context)
+        state.setdefault("last_tool_result", None)
+        state.setdefault("urgency", "routine")
+        state.setdefault("reason_for_visit", None)
+        
+    except Exception as e:
+        logger.error(f"Error in AI extraction: {e}")
+        # Fallback to basic extraction if AI fails
+        fallback_extract_basic_info(state, message)
     
-    # Extract name
-    for pattern in name_patterns:
-        match = re.search(pattern, message)
-        if match:
-            potential_name = match.group(1).strip()
-            if (len(potential_name.split()) >= 2 and 
-                not any(word in potential_name.lower() for word in ['book', 'me', 'one', 'on', 'for', 'at', 'with', 'the', 'appointm']) and
-                not potential_name.lower().startswith('book')):
-                state["patient_name"] = potential_name
-                break
+    return state
+
+def fallback_extract_basic_info(state: HospitalState, message: str):
+    """Fallback basic extraction if AI analysis fails"""
+    # Simple pattern-based extraction as backup
+    
+    # Extract name (basic patterns)
+    name_match = re.search(r'(?:name is|i am|i\'m|my name is|this is)\s+([a-zA-Z\s]+)', message, re.IGNORECASE)
+    if name_match and not state.get("patient_name"):
+        potential_name = name_match.group(1).strip()
+        if len(potential_name.split()) >= 2:
+            state["patient_name"] = potential_name
     
     # Extract DOB
-    for pattern in dob_patterns:
-        match = re.search(pattern, message, re.IGNORECASE)
-        if match:
-            state["date_of_birth"] = match.group(1).strip()
-            break
+    dob_match = re.search(r'\b(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})\b', message)
+    if dob_match and not state.get("date_of_birth"):
+        state["date_of_birth"] = dob_match.group(1)
     
-    # Extract specialization
-    specializations = ['cardiology', 'neurology', 'orthopedics', 'pediatrics', 'dermatology', 
-                      'psychiatry', 'gynecology', 'general medicine']
-    for spec in specializations:
-        if spec in message.lower():
-            state["specialization"] = spec.title()
-            break
+    # Extract basic intent
+    if any(word in message.lower() for word in ['book', 'schedule', 'appointment']):
+        state["intent"] = "book_appointment"
+        state["booking_intent"] = True
+    elif any(word in message.lower() for word in ['reschedule', 'change', 'move']):
+        state["intent"] = "reschedule"
+    elif any(word in message.lower() for word in ['cancel', 'delete']):
+        state["intent"] = "cancel"
+    elif any(word in message.lower() for word in ['check', 'find', 'show', 'my appointments']):
+        state["intent"] = "inquiry"
+    else:
+        state["intent"] = "greeting"
     
-    # Extract doctor preference
-    doctor_patterns = [
-        r'(?:dr\.|doctor)\s+([a-zA-Z\s]+?)(?:\s|,|$|\.)',
-        r'([A-Z][a-z]+\s+[A-Z][a-z]+)',
-        r'(?:book\s+me\s+in\s+)([a-zA-Z]+)',
-        r'(?:book\s+with\s+)([a-zA-Z]+)',
-        r'(?:book\s+)([a-zA-Z]+)',
-    ]
+    state["confidence_score"] = 0.5  # Low confidence for fallback
+
+def get_current_db_context():
+    """Get current database context for AI analysis"""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return {"doctors": [], "specializations": [], "recent_appointments": []}
+        
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            # Get specializations
+            cursor.execute("SELECT id, name FROM specializations WHERE is_active = TRUE ORDER BY name")
+            specializations = [dict(row) for row in cursor.fetchall()]
+            
+            # Get active doctors count
+            cursor.execute("SELECT COUNT(*) as count FROM doctors WHERE is_active = TRUE")
+            doctor_count = cursor.fetchone()['count']
+            
+            # Get recent appointments count
+            cursor.execute("""
+                SELECT COUNT(*) as count FROM appointments 
+                WHERE appointment_date >= CURRENT_DATE - INTERVAL '7 days'
+            """)
+            recent_count = cursor.fetchone()['count']
+            
+            return {
+                "specializations": specializations,
+                "doctors": [{"count": doctor_count}],  # Simplified for context
+                "recent_appointments": [{"count": recent_count}]
+            }
+    except Exception as e:
+        logger.error(f"Error getting DB context: {e}")
+        return {"doctors": [], "specializations": [], "recent_appointments": []}
+
+def format_conversation_context(messages):
+    """Format conversation history for AI context"""
+    if not messages:
+        return "No previous conversation"
     
-    for pattern in doctor_patterns:
-        match = re.search(pattern, message, re.IGNORECASE)
-        if match:
-            doctor_name = match.group(1).strip()
-            if (len(doctor_name.split()) >= 1 and 
-                not any(word in doctor_name.lower() for word in ['book', 'me', 'one', 'on', 'for', 'at', 'with', 'the', 'appointm', 'looking', 'want', 'check', 'find', 'show']) and
-                not doctor_name.lower().startswith('book')):
-                state["doctor_preference"] = doctor_name.title()
-                break
+    context = "Recent conversation:\n"
+    for msg in messages[-3:]:  # Last 3 messages
+        role = msg.get("role", "unknown")
+        content = msg.get("content", "")[:100]  # Truncate for context
+        context += f"{role}: {content}\n"
     
-    # Extract date and time
-    date_patterns = [
-        r'(?:on|for)\s+(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)',
-        r'(?:on|for)\s+(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})',
-        r'(next\s+\w+)',
-        r'(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})',
-    ]
+    return context
+
+def validate_patient_data(state: HospitalState) -> HospitalState:
+    """Validate patient data against database"""
+    if not state.get("needs_database_check"):
+        return state
     
-    for pattern in date_patterns:
-        match = re.search(pattern, message, re.IGNORECASE)
-        if match:
-            state["preferred_date"] = match.group(1).strip()
-            break
+    patient_name = state.get("patient_name")
+    date_of_birth = state.get("date_of_birth")
     
-    time_patterns = [
-        r'(\d{1,2}:\d{2}\s*(?:am|pm))',
-        r'(\d{1,2}\s*(?:am|pm))',
-        r'(morning|afternoon|evening)',
-        r'(\d{1,2}:\d{2})',
-    ]
+    if not (patient_name and date_of_birth):
+        return state
     
-    for pattern in time_patterns:
-        match = re.search(pattern, message, re.IGNORECASE)
-        if match:
-            state["preferred_time"] = match.group(1).strip()
-            break
+    try:
+        # Use the existing query_patient_appointments tool for validation
+        result = query_patient_appointments(patient_name, date_of_birth)
+        state["last_tool_result"] = result
+        state["database_queries_performed"].append("patient_lookup")
+        
+        # Check if patient exists based on result
+        if "couldn't find any records" in result.lower():
+            state["patient_exists"] = False
+            state["existing_appointments"] = []
+        else:
+            state["patient_exists"] = True
+            # Extract appointment information from result if available
+            if "upcoming appointments" in result.lower():
+                # Patient has appointments - they exist
+                state["existing_appointments"] = [{"status": "found_appointments"}]
+        
+    except Exception as e:
+        logger.error(f"Error validating patient data: {e}")
+        state["last_tool_result"] = f"Error checking patient information: {str(e)}"
     
-    # Check booking intent
-    booking_keywords = ['book', 'schedule', 'appointment', 'reserve', 'confirm', 'yes', 'okay', 'sure', 'proceed']
-    state["booking_intent"] = any(keyword in message.lower() for keyword in booking_keywords)
+    return state
+
+def determine_next_action(state: HospitalState) -> HospitalState:
+    """Dynamically determine the next action based on intent and available information"""
+    intent = state.get("intent", "unclear")
+    confidence = state.get("confidence_score", 0.0)
+    
+    # Reset action flags
+    state["should_book"] = False
+    state["needs_database_check"] = False
+    state["ready_for_booking"] = False
+    
+    if intent == "book_appointment":
+        # Check if we have all required information for booking
+        has_name = bool(state.get("patient_name"))
+        has_dob = bool(state.get("date_of_birth"))
+        has_specialty = bool(state.get("specialization"))
+        
+        if has_name and has_dob and has_specialty:
+            state["ready_for_booking"] = True
+            state["should_book"] = True
+        elif has_name and has_dob:
+            # Need to check availability or get specialty preference
+            state["needs_database_check"] = True
+        else:
+            # Need more information - will be handled by generate_response
+            pass
+    
+    elif intent == "inquiry":
+        if state.get("patient_name") and state.get("date_of_birth"):
+            state["needs_database_check"] = True
+    
+    elif intent == "availability_check":
+        # Check doctor/specialty availability
+        state["needs_database_check"] = True
+    
+    elif intent in ["reschedule", "cancel"]:
+        # Need to validate patient and find existing appointments
+        if state.get("patient_name") and state.get("date_of_birth"):
+            state["needs_database_check"] = True
+    
+    elif intent == "greeting" or confidence < 0.3:
+        # Low confidence or greeting - just generate conversational response
+        pass
+    
+    return state
+
+def execute_database_operations(state: HospitalState) -> HospitalState:
+    """Execute appropriate database operations based on intent and state"""
+    intent = state.get("intent", "unclear")
+    
+    if not state.get("needs_database_check"):
+        return state
+    
+    try:
+        if intent == "availability_check":
+            # Check doctor availability
+            specialization = state.get("specialization", "General Medicine")
+            doctor_preference = state.get("doctor_preference")
+            preferred_date = state.get("preferred_date")
+            
+            if doctor_preference:
+                # Check specific doctor's schedule
+                result = check_doctor_schedule(doctor_preference, preferred_date)
+                state["tools_used"].append("check_doctor_schedule")
+            else:
+                # Check general availability
+                result = query_doctor_availability(specialization, preferred_date)
+                state["tools_used"].append("query_doctor_availability")
+            
+            state["last_tool_result"] = result
+            state["database_queries_performed"].append("availability_check")
+        
+        elif intent == "inquiry" and state.get("patient_exists"):
+            # Patient exists, get their appointments
+            result = query_patient_appointments(state["patient_name"], state["date_of_birth"])
+            state["last_tool_result"] = result
+            state["tools_used"].append("query_patient_appointments")
+            state["database_queries_performed"].append("patient_appointments")
+        
+        elif intent == "book_appointment" and not state.get("ready_for_booking"):
+            # Get availability to help with booking decision
+            specialization = state.get("specialization", "General Medicine")
+            result = find_earliest_availability(specialization, state.get("doctor_preference"))
+            state["last_tool_result"] = result
+            state["tools_used"].append("find_earliest_availability")
+            state["database_queries_performed"].append("earliest_availability")
+    
+    except Exception as e:
+        logger.error(f"Error in database operations: {e}")
+        state["last_tool_result"] = f"Error accessing our appointment system: {str(e)}"
     
     return state
 
 def should_attempt_booking(state: HospitalState) -> HospitalState:
-    """Determine if we should attempt booking"""
-    has_essential_info = (state.get("patient_name") and state.get("date_of_birth"))
-    is_booking_request = state.get("booking_intent", False)
+    """Enhanced booking decision logic"""
+    # Check if all conditions are met for booking
+    ready_conditions = [
+        state.get("ready_for_booking", False),
+        state.get("should_book", False),
+        state.get("patient_name"),
+        state.get("date_of_birth"),
+        state.get("intent") == "book_appointment"
+    ]
     
-    # Check if this is an appointment query (not booking)
-    appointment_query_keywords = ['looking up', 'check', 'find', 'show', 'my appointments', 'appointments for']
-    is_appointment_query = any(keyword in state["current_message"].lower() for keyword in appointment_query_keywords)
+    state["should_book"] = all(ready_conditions)
     
-    state["should_book"] = has_essential_info and is_booking_request and not is_appointment_query
+    # Additional validation for booking readiness
+    if state["should_book"]:
+        # Ensure we have at least a specialty or doctor preference
+        if not (state.get("specialization") or state.get("doctor_preference")):
+            state["should_book"] = False
+            state["requires_clarification"].append("specialty_or_doctor")
+    
     return state
 
 def generate_ai_response(state: HospitalState) -> HospitalState:
-    """Generate AI response using LangChain with tools"""
-    llm = get_llm()
-    if not llm:
-        state["ai_response"] = "I'm having trouble processing your request. Please try again."
-        return state
+    """Generate AI response using enhanced Claude with comprehensive database context"""
+    from bedrock import get_ai_response
     
-    # Build system prompt
-    system_prompt = """You are a warm, friendly AI healthcare assistant helping patients book appointments at our hospital. You have real-time access to our medical database and can make actual bookings.
+    # Get database context and conversation state
+    db_context = state.get("db_context", {})
+    intent = state.get("intent", "unclear")
+    confidence = state.get("confidence_score", 0.0)
+    last_tool_result = state.get("last_tool_result")
+    requires_clarification = state.get("requires_clarification", [])
+    
+    # Build comprehensive context for Claude
+    context_info = build_comprehensive_context(state)
+    
+    # Build enhanced system prompt based on intent and state
+    system_prompt = f"""You are Claude, an intelligent AI assistant for a modern hospital appointment booking system. You have access to real-time database information and can coordinate actual appointment bookings.
 
-CRITICAL: You MUST use the database tools to get real information. NEVER make up or hallucinate data.
+🔍 CURRENT CONVERSATION STATE:
+Intent: {intent} (Confidence: {confidence:.1f})
+Patient Name: {state.get('patient_name', 'Not provided')}
+Date of Birth: {state.get('date_of_birth', 'Not provided')}
+Specialization: {state.get('specialization', 'Not specified')}
+Doctor Preference: {state.get('doctor_preference', 'None')}
+Preferred Date: {state.get('preferred_date', 'Not specified')}
+Preferred Time: {state.get('preferred_time', 'Not specified')}
 
-AVAILABLE TOOLS:
-- query_doctor_availability(specialty, target_date): Get real doctor availability by specialty
-- query_patient_appointments(patient_name, date_of_birth): Check existing patient appointments
-- book_appointment(patient_name, date_of_birth, specialization, doctor_preference, preferred_date, preferred_time): Actually book appointments
+📊 DATABASE CONTEXT:
+{context_info}
 
-CORE BEHAVIOR PRINCIPLES:
+🚨 ANTI-HALLUCINATION PROTOCOL:
+1. ALL specific medical information MUST come from database queries
+2. NEVER invent doctor names, appointment times, or availability
+3. If you need specific information, clearly state you're checking the database
+4. Use ONLY the database tool results provided to you
 
-💬 BE CONVERSATIONAL & NATURAL:
-- Sound like a helpful receptionist, not a robot
-- Use warm greetings: "Hello! How can I help you today?"
-- Acknowledge what users say: "I understand", "Of course!", "Great!"
-- Use contractions: "I'd", "you'll", "we're"
-- Add transitions: "Perfect!", "Let me check that for you"
+💬 CONVERSATION GUIDANCE:
 
-📝 DYNAMIC INFORMATION GATHERING:
-- Don't ask for everything at once
-- If someone says "I want to book an appointment", respond: "I'd be happy to help! May I have your name please?"
-- Remember what they've told you - don't ask twice
-- If they give multiple pieces of info, acknowledge all of them
+For BOOKING APPOINTMENTS:
+- Guide users through: Name → DOB → Specialty/Doctor → Date/Time
+- Be conversational: "I'd be happy to help! What's your name?"
+- Remember information provided earlier
+- Confirm details before booking
 
-📄 DATABASE INTEGRATION - CRITICAL:
-- ALWAYS use query_doctor_availability() when asked about doctor availability
-- ALWAYS use query_patient_appointments() when asked about patient appointments
-- ALWAYS use book_appointment() when confirming a booking
-- NEVER make up doctor names, availability, or appointment times
-- NEVER hallucinate data - only use real database information
+For AVAILABILITY CHECKS:
+- Use real database results only
+- Present options clearly with specific times and doctors
+- Suggest alternatives if first choice unavailable
 
-CONVERSATIONAL RESPONSES:
+For APPOINTMENT INQUIRIES:
+- Verify patient identity with name and DOB
+- Show real appointment details from database
+- Offer to help with changes if needed
 
-For availability queries:
-- User: "What is the availability in cardiology?"
-- You: "Let me check the real availability for cardiology doctors..." [USE query_doctor_availability("cardiology")]
+For GENERAL QUESTIONS:
+- Provide helpful guidance about our services
+- Direct them toward the information they need
+- Stay within your capabilities
 
-For specific doctor queries:
-- User: "When is Karen available?"
-- You: "Let me check Dr. Karen Lee's real schedule..." [USE query_doctor_availability("cardiology") and filter for Karen]
+🎯 RESPONSE STRATEGY:
+Based on the intent '{intent}' and available information, your response should:
+- Address their specific need
+- Use any database results provided
+- Ask for missing information naturally
+- Guide them toward the next logical step
+- Be warm, professional, and helpful
 
-For booking requests:
-- User: "Book me an appointment"
-- You: "I'll help you book that. Let me use the booking system..." [USE book_appointment() with provided details]
+CRITICAL: Never generate specific appointment details, doctor schedules, or availability information unless it comes directly from database tool results."""
+    
+    # Include database tool results if available
+    if last_tool_result:
+        system_prompt += f"\n\n📋 LATEST DATABASE RESULT:\n{last_tool_result}\n\nUse this information to provide accurate, helpful responses."
+    
+    # Handle clarification needs
+    if requires_clarification:
+        system_prompt += f"\n\n⚠️ NEEDS CLARIFICATION: {', '.join(requires_clarification)}\nAddress these gaps in your response."
+    
+    try:
+        # Get enhanced AI response with full context
+        ai_response = get_ai_response(
+            system_prompt, 
+            state["current_message"],
+            state.get("messages", [])[-10:],  # Last 10 messages for context
+            db_context
+        )
+        
+        state["ai_response"] = ai_response
+        
+    except Exception as e:
+        logger.error(f"Error generating AI response: {e}")
+        state["ai_response"] = generate_fallback_response(state)
+    
+    return state
 
-SMART BOOKING PROCESS:
-1. Greet warmly and ask for their name
-2. Thank them and ask for date of birth 
-3. Ask what type of doctor or if they have someone specific in mind
-4. Find out their preferred timing
-5. Confirm all details conversationally
-6. When they say "yes", use book_appointment() to actually book it
+def build_comprehensive_context(state: HospitalState) -> str:
+    """Build comprehensive context information for Claude"""
+    context = ""
+    
+    # Database context
+    db_context = state.get("db_context", {})
+    if db_context:
+        specializations = db_context.get("specializations", [])
+        if specializations:
+            context += f"Available Specializations: {', '.join([s.get('name', '') for s in specializations[:10]])}\n"
+        
+        doctors = db_context.get("doctors", [])
+        if doctors:
+            context += f"Active Doctors: {len(doctors)} across all specializations\n"
+    
+    # Tools used and results
+    tools_used = state.get("tools_used", [])
+    if tools_used:
+        context += f"Database Tools Used: {', '.join(tools_used)}\n"
+    
+    # Patient status
+    if state.get("patient_exists"):
+        context += "Patient Status: Found in database\n"
+    elif state.get("patient_name") and state.get("date_of_birth"):
+        context += "Patient Status: New patient (not found in database)\n"
+    
+    # Conversation context
+    conversation_context = state.get("conversation_context", {})
+    if conversation_context:
+        context += f"Conversation Context: {conversation_context}\n"
+    
+    return context if context else "No additional context available"
 
-REMEMBER CONTEXT:
-- If discussing Dr. Lisa (General Medicine), don't book Cardiology
-- If they mentioned a specialty, stick with it
-- Don't override their preferences with wrong specialties
-
-CONVERSATION EXCELLENCE:
-
-✅ DO:
-- Start responses acknowledging what they said
-- Use their name once you know it
-- Be empathetic: "I understand that can be concerning"
-- Provide clear next steps
-- Remember conversation context
-- ALWAYS use database tools for real information
-
-❌ DON'T:
-- Give robotic lists of information
-- Say "No doctors found" - instead offer alternatives
-- Ask for information they already provided
-- Generate fake confirmations
-- Switch specialties randomly
-- Use technical error messages
-- EVER make up or hallucinate data
-
-Remember: Be conversational, helpful, and ALWAYS use real database information through the available tools. Never hallucinate doctor names, availability, or appointment times."""
+def generate_fallback_response(state: HospitalState) -> str:
+    """Generate fallback response if AI generation fails"""
+    intent = state.get("intent", "unclear")
+    
+    fallback_responses = {
+        "book_appointment": "I'd be happy to help you book an appointment. To get started, I'll need your full name and date of birth. What's your name?",
+        "inquiry": "I can help you check your appointments. Please provide your full name and date of birth so I can look up your records.",
+        "availability_check": "I can check doctor availability for you. Which specialty or doctor would you like to see?",
+        "reschedule": "I can help you reschedule your appointment. Please provide your name and date of birth so I can find your existing appointment.",
+        "cancel": "I can help you cancel your appointment. Please provide your name and date of birth so I can locate your appointment.",
+        "greeting": "Hello! I'm here to help you with appointment booking, checking your existing appointments, or finding doctor availability. How can I assist you today?"
+    }
+    
+    return fallback_responses.get(intent, "I'm here to help with your medical appointments. How can I assist you today?")
 
     # Build messages for the LLM
     messages = [SystemMessage(content=system_prompt)]
@@ -1068,7 +1835,7 @@ def update_messages(state: HospitalState) -> HospitalState:
 # ============================================================================
 
 def create_hospital_graph():
-    """Create LangGraph for hospital conversation workflow"""
+    """Create enhanced LangGraph for dynamic hospital conversation workflow"""
     
     if not LANGGRAPH_AVAILABLE:
         logger.warning("LangGraph not available, returning None")
@@ -1077,8 +1844,11 @@ def create_hospital_graph():
     # Create the graph
     workflow = StateGraph(HospitalState)
     
-    # Add nodes
+    # Add enhanced workflow nodes
     workflow.add_node("extract_details", extract_appointment_details)
+    workflow.add_node("determine_action", determine_next_action)
+    workflow.add_node("validate_patient", validate_patient_data)
+    workflow.add_node("execute_db_ops", execute_database_operations)
     workflow.add_node("check_booking", should_attempt_booking)
     workflow.add_node("generate_response", generate_ai_response)
     workflow.add_node("attempt_booking", attempt_booking)
@@ -1087,10 +1857,117 @@ def create_hospital_graph():
     # Set entry point
     workflow.set_entry_point("extract_details")
     
-    # Add edges
-    workflow.add_edge("extract_details", "check_booking")
-    workflow.add_edge("check_booking", "generate_response")
-    workflow.add_edge("generate_response", "attempt_booking")
+    # Define conditional routing based on state
+    def route_after_extract(state: HospitalState) -> str:
+        """Route after extraction based on confidence and intent"""
+        confidence = state.get("confidence_score", 0.0)
+        intent = state.get("intent", "unclear")
+        
+        if confidence < 0.3 or intent == "unclear":
+            return "generate_response"  # Go directly to response for low confidence
+        else:
+            return "determine_action"  # Continue with action determination
+    
+    def route_after_action(state: HospitalState) -> str:
+        """Route after action determination"""
+        needs_db_check = state.get("needs_database_check", False)
+        patient_name = state.get("patient_name")
+        date_of_birth = state.get("date_of_birth")
+        
+        if needs_db_check and patient_name and date_of_birth:
+            return "validate_patient"
+        elif needs_db_check:
+            return "execute_db_ops"
+        else:
+            return "check_booking"
+    
+    def route_after_validation(state: HospitalState) -> str:
+        """Route after patient validation"""
+        needs_db_ops = state.get("needs_database_check", False)
+        
+        if needs_db_ops:
+            return "execute_db_ops"
+        else:
+            return "check_booking"
+    
+    def route_after_db_ops(state: HospitalState) -> str:
+        """Route after database operations"""
+        return "check_booking"
+    
+    def route_after_booking_check(state: HospitalState) -> str:
+        """Route after booking check"""
+        should_book = state.get("should_book", False)
+        
+        if should_book:
+            return "attempt_booking"
+        else:
+            return "generate_response"
+    
+    def route_after_response(state: HospitalState) -> str:
+        """Route after response generation"""
+        should_book = state.get("should_book", False)
+        
+        if should_book and not state.get("tools_used") or "book_appointment" not in state.get("tools_used", []):
+            return "attempt_booking"
+        else:
+            return "update_messages"
+    
+    # Add conditional edges
+    workflow.add_conditional_edges(
+        "extract_details",
+        route_after_extract,
+        {
+            "determine_action": "determine_action",
+            "generate_response": "generate_response"
+        }
+    )
+    
+    workflow.add_conditional_edges(
+        "determine_action",
+        route_after_action,
+        {
+            "validate_patient": "validate_patient",
+            "execute_db_ops": "execute_db_ops",
+            "check_booking": "check_booking"
+        }
+    )
+    
+    workflow.add_conditional_edges(
+        "validate_patient",
+        route_after_validation,
+        {
+            "execute_db_ops": "execute_db_ops",
+            "check_booking": "check_booking"
+        }
+    )
+    
+    workflow.add_conditional_edges(
+        "execute_db_ops",
+        route_after_db_ops,
+        {
+            "check_booking": "check_booking"
+        }
+    )
+    
+    workflow.add_conditional_edges(
+        "check_booking",
+        route_after_booking_check,
+        {
+            "attempt_booking": "attempt_booking",
+            "generate_response": "generate_response"
+        }
+    )
+    
+    workflow.add_conditional_edges(
+        "generate_response",
+        route_after_response,
+        {
+            "attempt_booking": "attempt_booking",
+            "update_messages": "update_messages"
+        }
+    )
+    
+    # Final edge
     workflow.add_edge("attempt_booking", "update_messages")
     workflow.add_edge("update_messages", END)
     
