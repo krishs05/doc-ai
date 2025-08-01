@@ -61,7 +61,10 @@ def run_schema_sql():
         tables = cursor.fetchall()
         print(f"\n📊 Created {len(tables)} tables:")
         for table_name, col_count in tables:
-            cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+            # Use parameterized query with psycopg2.sql for safe table name handling
+            from psycopg2 import sql
+            query = sql.SQL("SELECT COUNT(*) FROM {}").format(sql.Identifier(table_name))
+            cursor.execute(query)
             row_count = cursor.fetchone()[0]
             print(f"   ✓ {table_name}: {col_count} columns, {row_count} rows")
         
@@ -103,7 +106,10 @@ def test_database_structure():
         # Test expected tables exist
         expected_tables = ['specializations', 'doctors', 'patients', 'doctor_availability', 'appointments']
         for table in expected_tables:
-            cursor.execute(f"SELECT COUNT(*) as count FROM {table}")
+            # Use parameterized query with psycopg2.sql for safe table name handling
+            from psycopg2 import sql
+            query = sql.SQL("SELECT COUNT(*) as count FROM {}").format(sql.Identifier(table))
+            cursor.execute(query)
             count = cursor.fetchone()['count']
             print(f"   ✓ {table}: {count} records")
         

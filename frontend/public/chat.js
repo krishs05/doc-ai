@@ -204,23 +204,34 @@ class ChatInterface {
         }
     }
   
-    addMessage(content, sender) {
+        addMessage(content, sender) {
         const messagesContainer = document.getElementById('chatMessages');
         if (!messagesContainer) return;
-  
+
         const messageElement = document.createElement('div');
         messageElement.className = `message ${sender}`;
         
-        // Format message content
-        const formattedContent = this.formatMessage(content);
+        // Format message content safely
+        const formattedContent = this.formatMessageSafe(content);
         messageElement.innerHTML = formattedContent;
         
         messagesContainer.appendChild(messageElement);
         messagesContainer.scrollTop = messagesContainer.scrollHeight;
     }
-  
-    formatMessage(content) {
-        return content
+
+    // Safe HTML escaping function
+    escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    formatMessageSafe(content) {
+        // First escape all HTML to prevent XSS
+        let escaped = this.escapeHtml(content);
+        
+        // Then apply safe formatting
+        return escaped
             .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
             .replace(/\*(.*?)\*/g, '<em>$1</em>')
             .replace(/\n/g, '<br>')

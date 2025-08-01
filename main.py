@@ -98,11 +98,19 @@ DB_CONFIG = {
     'port': os.getenv('DB_PORT', 5432)
 }
 
-# Redis configuration
+# Redis configuration with safe type conversion
+def safe_int_conversion(value, default=0):
+    """Safely convert a string to int with fallback to default"""
+    try:
+        return int(value) if value is not None else default
+    except (ValueError, TypeError):
+        logger.warning(f"Invalid integer value '{value}', using default {default}")
+        return default
+
 REDIS_CONFIG = {
     'url': f"redis://{os.getenv('REDIS_HOST', 'localhost')}:{os.getenv('REDIS_PORT', 6379)}",
     'password': os.getenv('REDIS_PASSWORD'),
-    'db': int(os.getenv('REDIS_DB', 0))
+    'db': safe_int_conversion(os.getenv('REDIS_DB'), 0)
 }
 
 # Try importing AWS Bedrock
